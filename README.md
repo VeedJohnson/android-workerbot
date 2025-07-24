@@ -46,10 +46,10 @@
    adb shell mkdir -p /data/local/tmp/llm
    adb push android/models/gemma3-1b-it-int4.task /data/local/tmp/llm/
 
-3. **Run on device**
-   • Launch from Android Studio
-   • On first launch the app will:
-    1.	Load knowledge_base_eng.txt from assets/
-    2.	Chunk & embed it
-    3.	Index in ObjectBox
-    4.	Initialize the MediaPipe LLM session
+3. **Run on device**  
+   - Launch from Android Studio  
+   - On first launch the app will:  
+     1. Load `knowledge_base_eng.txt` from `assets/`  
+     2. Chunk & embed it  
+     3. Index in ObjectBox  
+     4. Initialize the MediaPipe LLM session  
