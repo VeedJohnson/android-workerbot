@@ -1,0 +1,2 @@
+- Initial release of `WorkerBot`
+- The app allows migrant workers asks questions around the UK seasonal work visa.
