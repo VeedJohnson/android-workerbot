@@ -57,7 +57,7 @@ class MediaPipeLLMAPI(
                 LlmInferenceSession.LlmInferenceSessionOptions.builder()
                     .setTopK(40)
                     .setTopP(0.4f)
-                    .setTemperature(0.3f)
+                    .setTemperature(0.2f)
                     .build()
             )
         } catch (e: Exception) {
@@ -139,15 +139,15 @@ class MediaPipeLLMAPI(
 
     // Enhanced prompt building for RAG
     fun buildRagPrompt(userQuery: String, context: String): String {
-        return if (context.trim().isNotEmpty()) {
+        return (
             """
             You are a UK Seasonal Worker Scheme expert. Answer the user's question using ONLY the context information provided below. Do not mention source documents. Speak directly and clearly.
             
             IMPORTANT: If the context contains the answer, provide it clearly. Only say you don't have the information if the context truly doesn't contain relevant details.
             
-            Include any relevant URLs from the text.
+            Make sure to include any relevant links from the context.
             
-            If you cannot find the answer in the context below, reply exactly: "I'm sorry, but I don't have that information. For more help, please contact FiftyEight at https://fiftyeight.io/contact/"
+            If you cannot find the answer in the context below, reply as such: "I'm sorry, but I don't have that information. For more help, please contact FiftyEight at https://fiftyeight.io/contact/"
             
             ─── CONTEXT ───
             $context
@@ -156,10 +156,7 @@ class MediaPipeLLMAPI(
             $userQuery
             
             Answer:
-            """.trimIndent()
-        } else {
-            "I'm sorry, but I don't have that information. For more help, please contact FiftyEight at https://fiftyeight.io/contact/"
-        }
+            """.trimIndent())
     }
 
     fun cleanup() {

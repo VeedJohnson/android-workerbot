@@ -2,6 +2,7 @@ package com.veedjohnson.workerbot.ui.screens.chat
 
 import android.content.Intent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,12 +24,13 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,6 +52,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
@@ -68,6 +71,11 @@ data class ChatMessage(
     val isStreaming: Boolean = false
 )
 
+enum class AppLanguage(val code: String, val displayName: String, val flag: String) {
+    ENGLISH("en", "English", "🇬🇧"),
+    RUSSIAN("ru", "Русский", "🇷🇺")
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
@@ -85,17 +93,26 @@ fun ChatScreen(
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = Icons.Default.SmartToy,
+                                imageVector = Icons.Default.SupportAgent,
                                 contentDescription = null,
                                 tint = Color.Blue,
                                 modifier = Modifier.size(24.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Knowledge Base Assistant",
+                                text = "WorkerBot",
                                 style = MaterialTheme.typography.headlineSmall,
                             )
                         }
+                    },
+                    actions = {
+                        // Language selector dropdown
+                        LanguageSelector(
+                            currentLanguage = screenUiState.selectedLanguage,
+                            onLanguageSelected = { language ->
+                                onScreenEvent(ChatScreenUIEvent.LanguageChanged(language))
+                            }
+                        )
                     }
                 )
             },
@@ -122,12 +139,11 @@ fun ChatScreen(
                         onScreenEvent(
                             ChatScreenUIEvent.ResponseGeneration.Start(
                                 message,
-                                // You might want to get this from resources or pass it differently
-                                "Use the following context to answer the user's question: \$CONTEXT\n\nQuestion: \$QUERY"
                             )
                         )
                     },
-                    enabled = screenUiState.isSystemReady && !screenUiState.isGeneratingResponse
+                    enabled = screenUiState.isSystemReady && !screenUiState.isGeneratingResponse,
+                    language = screenUiState.selectedLanguage
                 )
             }
             AppAlertDialog()
@@ -211,34 +227,98 @@ private fun ChatMessagesArea(
 }
 
 @Composable
-private fun EmptyStateView() {
+fun LanguageSelector(
+    currentLanguage: AppLanguage,
+    onLanguageSelected: (AppLanguage) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Box {
+        // Current language display
+        Row(
+            modifier = Modifier
+                .clickable { expanded = true }
+                .padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = currentLanguage.flag,
+                fontSize = 20.sp
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = currentLanguage.code.uppercase(),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium
+            )
+        }
+
+        // Dropdown menu
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            AppLanguage.entries.forEach { language ->
+                DropdownMenuItem(
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = language.flag,
+                                fontSize = 18.sp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = language.displayName,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    },
+                    onClick = {
+                        onLanguageSelected(language)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyStateView(language: AppLanguage = AppLanguage.ENGLISH) {
     Column(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Icon(
-            imageVector = Icons.Default.Search,
+            imageVector = Icons.Default.Language,
             contentDescription = null,
             tint = Color.LightGray,
             modifier = Modifier.size(64.dp)
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-            text = "Ask me anything about the knowledge base!",
+            text = when (language) {
+                AppLanguage.RUSSIAN -> "Спросите меня о программе сезонных рабочих!"
+                AppLanguage.ENGLISH -> "Ask me about the Seasonal Worker Scheme!"
+            },
             style = MaterialTheme.typography.bodyLarge,
             color = Color.Gray,
             textAlign = TextAlign.Center
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "I'm ready to help you find information",
+            text = when (language) {
+                AppLanguage.RUSSIAN -> "Я готов помочь вам найти информацию"
+                AppLanguage.ENGLISH -> "I'm ready to help you find information"
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = Color.LightGray,
             textAlign = TextAlign.Center
         )
     }
 }
+
 
 @Composable
 private fun InitializingMessage(message: String = "Initializing...") {
@@ -316,7 +396,7 @@ private fun AssistantMessageBubble(
         Column(modifier = Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.Top) {
                 Icon(
-                    imageVector = Icons.Default.SmartToy,
+                    imageVector = Icons.Default.SupportAgent,
                     contentDescription = null,
                     tint = Color.Blue,
                     modifier = Modifier.size(16.dp)
@@ -336,34 +416,6 @@ private fun AssistantMessageBubble(
                     if (showTypingIndicator) {
                         Spacer(modifier = Modifier.height(4.dp))
                         TypingIndicator()
-                    }
-                }
-            }
-
-            if (content.isNotEmpty() && !showTypingIndicator) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    IconButton(
-                        onClick = {
-                            val sendIntent = Intent().apply {
-                                action = Intent.ACTION_SEND
-                                putExtra(Intent.EXTRA_TEXT, content)
-                                type = "text/plain"
-                            }
-                            val shareIntent = Intent.createChooser(sendIntent, null)
-                            context.startActivity(shareIntent)
-                        },
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Share,
-                            contentDescription = "Share response",
-                            tint = Color.Gray,
-                            modifier = Modifier.size(16.dp)
-                        )
                     }
                 }
             }
@@ -401,7 +453,8 @@ private fun TypingIndicator() {
 @Composable
 private fun ChatInputArea(
     onSendMessage: (String) -> Unit,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    language: AppLanguage = AppLanguage.ENGLISH
 ) {
     var messageText by remember { mutableStateOf("") }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -423,7 +476,10 @@ private fun ChatInputArea(
                 modifier = Modifier.weight(1f),
                 placeholder = {
                     Text(
-                        text = "Ask about the knowledge base...",
+                        text = when (language) {
+                            AppLanguage.RUSSIAN -> "Спросите о программе сезонных рабочих..."
+                            AppLanguage.ENGLISH -> "Ask about the Seasonal Worker Scheme..."
+                        },
                         color = Color.Gray
                     )
                 },
@@ -461,7 +517,10 @@ private fun ChatInputArea(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "Send message",
+                    contentDescription = when (language) {
+                        AppLanguage.RUSSIAN -> "Отправить сообщение"
+                        AppLanguage.ENGLISH -> "Send message"
+                    },
                     tint = Color.White
                 )
             }

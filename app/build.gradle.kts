@@ -88,6 +88,11 @@ dependencies {
     // https://github.com/shubham0204/Sentence-Embeddings-Android
     implementation(files("libs/sentence_embeddings.aar"))
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.17.0")
+    implementation(libs.common)
+
+    // ML Kit Translation
+    implementation(libs.language.id)
+    implementation(libs.translate)
 
     // ObjectBox - vector database
     debugImplementation(libs.objectbox.android.objectbrowser)

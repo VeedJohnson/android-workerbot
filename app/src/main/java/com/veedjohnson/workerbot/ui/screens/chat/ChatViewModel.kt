@@ -14,6 +14,7 @@ import com.veedjohnson.workerbot.domain.KnowledgeBaseLoader
 import com.veedjohnson.workerbot.domain.MediaPipeLLMAPI
 import com.veedjohnson.workerbot.domain.SentenceEmbeddingProvider
 import com.veedjohnson.workerbot.domain.Chunker
+import com.veedjohnson.workerbot.domain.TranslationService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,12 +23,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.android.annotation.KoinViewModel
 
-// Simplified events - removed navigation events since we only have chat
+// Simplified events
 sealed interface ChatScreenUIEvent {
+    data class LanguageChanged(val language: AppLanguage) : ChatScreenUIEvent
+
     sealed class ResponseGeneration {
         data class Start(
             val query: String,
-            val prompt: String,
         ) : ChatScreenUIEvent
 
         data class StopWithSuccess(
@@ -51,6 +53,10 @@ data class ChatScreenUIState(
     val isInitializingLLM: Boolean = false,
     val isSystemReady: Boolean = false,
     val conversationHistory: List<ChatMessage> = emptyList(),
+    val selectedLanguage: AppLanguage = AppLanguage.ENGLISH,
+    // Separate histories for each language
+    val englishConversationHistory: List<ChatMessage> = emptyList(),
+    val russianConversationHistory: List<ChatMessage> = emptyList(),
 )
 
 @KoinViewModel
@@ -60,7 +66,8 @@ class ChatViewModel(
     private val chunksDB: ChunksDB,
     private val sentenceEncoder: SentenceEmbeddingProvider,
     private val knowledgeBaseLoader: KnowledgeBaseLoader,
-    private val mediaPipeLLM: MediaPipeLLMAPI
+    private val mediaPipeLLM: MediaPipeLLMAPI,
+    private val translationService: TranslationService
 ) : ViewModel() {
 
     private val _chatScreenUIState = MutableStateFlow(ChatScreenUIState())
@@ -76,6 +83,7 @@ class ChatViewModel(
     private suspend fun initializeSystem() {
         var knowledgeBaseReady = false
         var llmReady = false
+        var translationReady = false
 
         try {
             // Step 1: Initialize Knowledge Base
@@ -88,14 +96,16 @@ class ChatViewModel(
             Log.d("ChatViewModel", "Starting knowledge base initialization...")
 
             // Check if knowledge base is already loaded
-            if (documentsDB.getDocsCount() == 0L) {
-                Log.d("ChatViewModel", "Knowledge base not found, processing from assets...")
-                processKnowledgeBase()
-                Log.d("ChatViewModel", "Knowledge base processed successfully")
-            } else {
-                Log.d("ChatViewModel", "Knowledge base already exists, skipping...")
-            }
+//            if (documentsDB.getDocsCount() == 0L) {
+//                Log.d("ChatViewModel", "Knowledge base not found, processing from assets...")
+//                processKnowledgeBase()
+//                Log.d("ChatViewModel", "Knowledge base processed successfully")
+//            } else {
+//                Log.d("ChatViewModel", "Knowledge base already exists, skipping...")
+//            }
 
+            processKnowledgeBase()
+            Log.d("ChatViewModel", "Knowledge base processed successfully")
             knowledgeBaseReady = true
             withContext(Dispatchers.Main) {
                 _chatScreenUIState.value = _chatScreenUIState.value.copy(
@@ -138,6 +148,17 @@ class ChatViewModel(
                 }
             }
 
+            // Step 3: Initialize Translation Service (NEW)
+            Log.d("ChatViewModel", "Starting translation service initialization...")
+            translationReady = translationService.initializeTranslators()
+            Log.d("ChatViewModel", "Translation service result: $translationReady")
+
+            if (translationReady) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(application, "Translation service ready!", Toast.LENGTH_SHORT).show()
+                }
+            }
+
         } catch (e: Exception) {
             Log.e("ChatViewModel", "Initialization error", e)
             withContext(Dispatchers.Main) {
@@ -152,12 +173,12 @@ class ChatViewModel(
                 _chatScreenUIState.value = _chatScreenUIState.value.copy(
                     isInitializingKnowledgeBase = false,
                     isInitializingLLM = false,
-                    isSystemReady = knowledgeBaseReady && llmReady
+                    isSystemReady = knowledgeBaseReady && llmReady && translationReady
                 )
 
                 Log.d("ChatViewModel", "Final state - KB: $knowledgeBaseReady, LLM: $llmReady, Ready: ${knowledgeBaseReady && llmReady}")
 
-                if (knowledgeBaseReady && llmReady) {
+                if (knowledgeBaseReady && llmReady && translationReady) {
                     Toast.makeText(
                         application,
                         "System ready! You can start chatting.",
@@ -170,7 +191,7 @@ class ChatViewModel(
         }
     }
 
-    private suspend fun processKnowledgeBase() {
+    private fun processKnowledgeBase() {
         try {
             Log.d("ChatViewModel", "Loading knowledge base from assets...")
             val knowledgeBaseText = knowledgeBaseLoader.loadKnowledgeBase()
@@ -221,8 +242,49 @@ class ChatViewModel(
         }
     }
 
-    fun onChatScreenEvent(event: ChatScreenUIEvent) {
+     fun onChatScreenEvent(event: ChatScreenUIEvent) {
         when (event) {
+            is ChatScreenUIEvent.LanguageChanged -> {
+                val previousLanguage = _chatScreenUIState.value.selectedLanguage
+                val newLanguage = event.language
+
+                Log.d("ChatViewModel", "Language changed from ${previousLanguage.displayName} to ${newLanguage.displayName}")
+
+                // First, save current conversation to the previous language's history
+                val currentState = _chatScreenUIState.value
+
+                // Then, load the conversation history for the new language
+                val newConversationHistory = when (newLanguage) {
+                    AppLanguage.ENGLISH -> currentState.englishConversationHistory
+                    AppLanguage.RUSSIAN -> currentState.russianConversationHistory
+                }
+
+                Log.d("ChatViewModel", "Loading ${newLanguage.displayName} history with ${newConversationHistory.size} messages")
+
+                _chatScreenUIState.value = _chatScreenUIState.value.copy(
+                    selectedLanguage = newLanguage,
+                    conversationHistory = newConversationHistory,
+                    // Clear current response when switching languages
+                    question = "",
+                    response = "",
+                    retrievedContextList = emptyList(),
+                    isGeneratingResponse = false,
+                    isStreamingResponse = false
+                )
+
+                // Show language switch message
+
+                    Toast.makeText(
+                        application,
+                        when (newLanguage) {
+                            AppLanguage.ENGLISH -> "Switched to English"
+                            AppLanguage.RUSSIAN -> "Переключено на русский"
+                        },
+                        Toast.LENGTH_SHORT
+                    ).show()
+
+            }
+
             is ChatScreenUIEvent.ResponseGeneration.Start -> {
                 if (!_chatScreenUIState.value.isSystemReady) {
                     Toast.makeText(
@@ -258,17 +320,33 @@ class ChatViewModel(
                     conversationHistory = updatedHistory
                 )
 
-                getAnswer(event.query, event.prompt, updatedHistory)
+                getAnswer(event.query, updatedHistory)
             }
 
             is ChatScreenUIEvent.ResponseGeneration.StopWithSuccess -> {
+                // Add assistant response to conversation
+                val currentLanguage = _chatScreenUIState.value.selectedLanguage
+
                 // Add assistant response to conversation
                 val assistantMessage = ChatMessage(
                     content = event.response,
                     isFromUser = false
                 )
 
-                val updatedHistory = _chatScreenUIState.value.conversationHistory + assistantMessage
+                val currentHistory = _chatScreenUIState.value.conversationHistory
+                val updatedHistory = currentHistory + assistantMessage
+
+                // Update the appropriate language-specific history
+                val updatedState = when (currentLanguage) {
+                    AppLanguage.ENGLISH -> _chatScreenUIState.value.copy(
+                        englishConversationHistory = updatedHistory,
+                        conversationHistory = updatedHistory
+                    )
+                    AppLanguage.RUSSIAN -> _chatScreenUIState.value.copy(
+                        russianConversationHistory = updatedHistory,
+                        conversationHistory = updatedHistory
+                    )
+                }
 
                 _chatScreenUIState.value = _chatScreenUIState.value.copy(
                     isGeneratingResponse = false,
@@ -296,90 +374,152 @@ class ChatViewModel(
 
     private fun getAnswer(
         query: String,
-        prompt: String,
         conversationHistory: List<ChatMessage>
     ) {
-        try {
-            var jointContext = ""
-            val retrievedContextList = ArrayList<RetrievedContext>()
-            val queryEmbedding = sentenceEncoder.encodeText(query)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val currentLanguage = _chatScreenUIState.value.selectedLanguage
+                val isRussian = currentLanguage == AppLanguage.RUSSIAN
+                Log.d("ChatViewModel", "Processing query in ${currentLanguage.displayName}: $query")
 
-            // Get similar chunks and deduplicate more aggressively
-            val allChunks = chunksDB.getSimilarChunks(queryEmbedding, n = 3)
-            val seenContent = mutableSetOf<String>()
-
-            for ((score, chunk) in allChunks) {
-                // More aggressive deduplication - check for exact substring matches
-                val chunkText = chunk.chunkData.trim()
-                val isDuplicate = seenContent.any { existing ->
-                    // Check if this chunk is a substring of existing or vice versa
-                    existing.contains(chunkText) || chunkText.contains(existing) ||
-                            calculateSimpleSimilarity(existing, chunkText) > 0.5  // Lower threshold
+                // Step 1: Translate query to English if needed
+                val englishQuery = if (isRussian) {
+                    Log.d("ChatViewModel", "Translating Russian query to English...")
+                    translationService.translateToEnglish(query)
+                } else {
+                    query
                 }
 
-                if (!isDuplicate && retrievedContextList.size <= 3) {
-                    seenContent.add(chunkText)
-                    retrievedContextList.add(
-                        RetrievedContext(
-                            chunk.docFileName,
-                            chunkText
-                        )
-                    )
-                    Log.d("ChatViewModel", "Added unique chunk with score: $score")
-                }
-            }
+                Log.d("ChatViewModel", "English query: $englishQuery")
 
-            jointContext = retrievedContextList.joinToString("\n----------\n") { it.context }
+                // Step 2: RAG retrieval using English query
+                var jointContext = ""
+                val retrievedContextList = ArrayList<RetrievedContext>()
+                val queryEmbedding = sentenceEncoder.encodeText(query)
 
-            Log.d("ChatViewModel", "Final context for query '$query':")
-            Log.d("ChatViewModel", jointContext)
-            Log.d("ChatViewModel", "Context length: ${jointContext.length} chars")
-            Log.d("ChatViewModel", "Conversation history size: ${conversationHistory.size} messages")
+                // Get similar chunks and deduplicate more aggressively
+                val allChunks = chunksDB.getSimilarChunks(queryEmbedding, n = 3)
+                val seenContent = mutableSetOf<String>()
 
-            // Replace prompt placeholders
-            val inputPrompt = prompt.replace("\$CONTEXT", jointContext).replace("\$QUERY", query)
-
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    // Build enhanced RAG prompt
-                    val ragPrompt = mediaPipeLLM.buildRagPrompt(query, jointContext)
-
-                    // Generate streaming response with MediaPipe and conversation history
-                    var fullResponse = ""
-                    mediaPipeLLM.generateResponseStreaming(
-                        ragPrompt,
-                        conversationHistory.dropLast(1) // Exclude current user message to avoid duplication
-                    ) { partialResult: String, done: Boolean ->
-                        fullResponse += partialResult
-
-                        // Update UI with streaming response
-                        _chatScreenUIState.value = _chatScreenUIState.value.copy(
-                            response = fullResponse
-                        )
-
-                        if (done) {
-                            onChatScreenEvent(
-                                ChatScreenUIEvent.ResponseGeneration.StopWithSuccess(
-                                    fullResponse,
-                                    retrievedContextList,
-                                )
-                            )
-                        }
+                for ((score, chunk) in allChunks) {
+                    // More aggressive deduplication - check for exact substring matches
+                    val chunkText = chunk.chunkData.trim()
+                    val isDuplicate = seenContent.any { existing ->
+                        // Check if this chunk is a substring of existing or vice versa
+                        existing.contains(chunkText) || chunkText.contains(existing) ||
+                                calculateSimpleSimilarity(
+                                    existing,
+                                    chunkText
+                                ) > 0.5  // Lower threshold
                     }
-                } catch (e: Exception) {
-                    onChatScreenEvent(
-                        ChatScreenUIEvent.ResponseGeneration.StopWithError(
-                            e.message ?: "Unknown error occurred"
+
+                    if (!isDuplicate && retrievedContextList.size <= 3) {
+                        seenContent.add(chunkText)
+                        retrievedContextList.add(
+                            RetrievedContext(
+                                chunk.docFileName,
+                                chunkText
+                            )
                         )
-                    )
+                        Log.d("ChatViewModel", "Added unique chunk with score: $score")
+                    }
                 }
-            }
-        } catch (e: Exception) {
-            onChatScreenEvent(
-                ChatScreenUIEvent.ResponseGeneration.StopWithError(
-                    e.message ?: "Unknown error occurred"
+
+                jointContext = retrievedContextList.joinToString("\n----------\n") { it.context }
+
+                Log.d("ChatViewModel", "Final context for query '$query':")
+                Log.d("ChatViewModel", jointContext)
+                Log.d("ChatViewModel", "Context length: ${jointContext.length} chars")
+                Log.d(
+                    "ChatViewModel",
+                    "Conversation history size: ${conversationHistory.size} messages"
                 )
-            )
+
+                // Step 3: Generate response using English RAG prompt
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        // Build enhanced RAG prompt
+                        val ragPrompt = mediaPipeLLM.buildRagPrompt(englishQuery, jointContext)
+
+                        var fullEnglishResponse = ""
+                        mediaPipeLLM.generateResponseStreaming(
+                            ragPrompt,
+                            conversationHistory.dropLast(1) // Exclude current user message
+                        ) { partialResult: String, done: Boolean ->
+                            fullEnglishResponse += partialResult
+
+                            // Step 4: Handle streaming based on language
+                            if (isRussian) {
+                                // Show English with translation indicator for streaming
+                                _chatScreenUIState.value = _chatScreenUIState.value.copy(
+                                    response = "$fullEnglishResponse\n\n(переводится...)"
+                                )
+                            } else {
+                                // Show English directly
+                                _chatScreenUIState.value = _chatScreenUIState.value.copy(
+                                    response = fullEnglishResponse
+                                )
+                            }
+
+                            if (done) {
+                                // Step 5: Translate final response if needed
+                                if (isRussian) {
+                                    Log.d(
+                                        "ChatViewModel",
+                                        "Translating final response to Russian..."
+                                    )
+                                    CoroutineScope(Dispatchers.IO).launch {
+                                        try {
+                                            val russianResponse =
+                                                translationService.translateToRussian(
+                                                    fullEnglishResponse
+                                                )
+                                            onChatScreenEvent(
+                                                ChatScreenUIEvent.ResponseGeneration.StopWithSuccess(
+                                                    russianResponse,
+                                                    retrievedContextList,
+                                                )
+                                            )
+                                        } catch (e: Exception) {
+                                            Log.e(
+                                                "ChatViewModel",
+                                                "Translation failed, using English",
+                                                e
+                                            )
+                                            onChatScreenEvent(
+                                                ChatScreenUIEvent.ResponseGeneration.StopWithSuccess(
+                                                    fullEnglishResponse,
+                                                    retrievedContextList,
+                                                )
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    onChatScreenEvent(
+                                        ChatScreenUIEvent.ResponseGeneration.StopWithSuccess(
+                                            fullEnglishResponse,
+                                            retrievedContextList,
+                                        )
+                                    )
+                                }
+                            }
+                        }
+
+                    } catch (e: Exception) {
+                        onChatScreenEvent(
+                            ChatScreenUIEvent.ResponseGeneration.StopWithError(
+                                e.message ?: "Unknown error occurred"
+                            )
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                onChatScreenEvent(
+                    ChatScreenUIEvent.ResponseGeneration.StopWithError(
+                        e.message ?: "Unknown error occurred"
+                    )
+                )
+            }
         }
     }
 
