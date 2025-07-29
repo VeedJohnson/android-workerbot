@@ -17,6 +17,13 @@ class DocumentsDB {
         docsBox.remove(docId)
     }
 
+    fun getDocumentIdByFileName(fileName: String): Long? {
+        return docsBox
+            .query(Document_.docFileName.equal(fileName))
+            .build()
+            .findFirst()?.docId
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     fun getAllDocuments(): Flow<MutableList<Document>> =
         docsBox

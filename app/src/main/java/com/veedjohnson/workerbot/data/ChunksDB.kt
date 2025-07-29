@@ -38,4 +38,15 @@ class ChunksDB {
                 .toList(),
         )
     }
+
+
+    fun removeChunksByDocId(docId: Long): Int {
+        val chunksToRemove = chunksBox
+            .query(Chunk_.docId.equal(docId))
+            .build()
+            .find()
+
+        chunksBox.remove(chunksToRemove)
+        return chunksToRemove.size
+    }
 }

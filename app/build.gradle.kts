@@ -38,6 +38,10 @@ android {
                 "proguard-rules.pro",
             )
             signingConfig = signingConfigs.getByName("release")
+            buildConfigField("String", "HF_TOKEN", "\"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\"")
+        }
+        debug {
+            buildConfigField("String", "HF_TOKEN", "\"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\"")
         }
     }
     compileOptions {
@@ -49,6 +53,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     packaging {
         resources {
@@ -79,6 +84,7 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    implementation(libs.gson)
 
     // MediaPipe LLM
     implementation(libs.tasks.genai)
@@ -87,7 +93,12 @@ dependencies {
     // Sentence Embeddings
     // https://github.com/shubham0204/Sentence-Embeddings-Android
     implementation(files("libs/sentence_embeddings.aar"))
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.17.0")
+    implementation(libs.onnxruntime.android)
+    implementation(libs.common)
+
+    // ML Kit Translation
+    implementation(libs.language.id)
+    implementation(libs.translate)
 
     // ObjectBox - vector database
     debugImplementation(libs.objectbox.android.objectbrowser)

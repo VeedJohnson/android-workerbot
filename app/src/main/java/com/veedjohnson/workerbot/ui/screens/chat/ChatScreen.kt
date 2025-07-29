@@ -1,7 +1,8 @@
 package com.veedjohnson.workerbot.ui.screens.chat
 
-import android.content.Intent
+import android.os.LocaleList
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,19 +24,26 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.SupportAgent
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -50,7 +58,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -58,6 +68,7 @@ import androidx.compose.ui.unit.sp
 import com.veedjohnson.workerbot.ui.components.AppAlertDialog
 import com.veedjohnson.workerbot.ui.theme.AppTheme
 import dev.jeziellago.compose.markdowntext.MarkdownText
+import java.util.Locale
 
 // Chat message data class
 data class ChatMessage(
@@ -67,6 +78,11 @@ data class ChatMessage(
     val timestamp: Long = System.currentTimeMillis(),
     val isStreaming: Boolean = false
 )
+
+enum class AppLanguage(val code: String, val displayName: String, val flag: String) {
+    ENGLISH("en", "English", "🇬🇧"),
+    RUSSIAN("ru", "Русский", "🇷🇺")
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -85,15 +101,33 @@ fun ChatScreen(
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = Icons.Default.SmartToy,
+                                imageVector = Icons.Default.SupportAgent,
                                 contentDescription = null,
                                 tint = Color.Blue,
                                 modifier = Modifier.size(24.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Knowledge Base Assistant",
+                                text = "WorkerBot",
                                 style = MaterialTheme.typography.headlineSmall,
+                            )
+                        }
+                    },
+                    actions = {
+                        if (screenUiState.isSystemReady) {
+                            ClearHistoryButton(
+                                currentLanguage = screenUiState.selectedLanguage,
+                                totalMessages = screenUiState.conversationHistory.size +
+                                        screenUiState.englishConversationHistory.size +
+                                        screenUiState.russianConversationHistory.size,
+                                onClearHistory = { onScreenEvent(ChatScreenUIEvent.ClearAllChatHistory) }
+                            )
+                            // Language selector dropdown
+                            LanguageSelector(
+                                currentLanguage = screenUiState.selectedLanguage,
+                                onLanguageSelected = { language ->
+                                    onScreenEvent(ChatScreenUIEvent.LanguageChanged(language))
+                                }
                             )
                         }
                     }
@@ -111,10 +145,13 @@ fun ChatScreen(
                     isGenerating = screenUiState.isGeneratingResponse,
                     isInitializingKnowledgeBase = screenUiState.isInitializingKnowledgeBase,
                     isInitializingLLM = screenUiState.isInitializingLLM,
+                    isDownloadingModel = screenUiState.isDownloadingModel,
                     isSystemReady = screenUiState.isSystemReady,
                     screenUiState,
                     modifier = Modifier.weight(1f)
                 )
+
+
 
                 // Input area
                 ChatInputArea(
@@ -122,15 +159,52 @@ fun ChatScreen(
                         onScreenEvent(
                             ChatScreenUIEvent.ResponseGeneration.Start(
                                 message,
-                                // You might want to get this from resources or pass it differently
-                                "Use the following context to answer the user's question: \$CONTEXT\n\nQuestion: \$QUERY"
                             )
                         )
                     },
-                    enabled = screenUiState.isSystemReady && !screenUiState.isGeneratingResponse
+                    enabled = screenUiState.isSystemReady && !screenUiState.isGeneratingResponse,
+                    language = screenUiState.selectedLanguage
                 )
+
+                AIDisclaimerBar(screenUiState.selectedLanguage)
             }
             AppAlertDialog()
+        }
+    }
+}
+
+@Composable
+private fun AIDisclaimerBar(language: AppLanguage) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = Color.Gray.copy(alpha = 0.1f)
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Info,
+                contentDescription = null,
+                tint = Color.Gray,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = when (language) {
+                    AppLanguage.ENGLISH -> "Responses are AI-generated and may contain errors"
+                    AppLanguage.RUSSIAN -> "Ответы генерируются ИИ и могут содержать ошибки"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }
@@ -141,6 +215,7 @@ private fun ChatMessagesArea(
     isGenerating: Boolean,
     isInitializingKnowledgeBase: Boolean,
     isInitializingLLM: Boolean,
+    isDownloadingModel: Boolean,
     isSystemReady: Boolean,
     screenUiState: ChatScreenUIState,
     modifier: Modifier = Modifier
@@ -157,7 +232,7 @@ private fun ChatMessagesArea(
     Box(modifier = modifier.fillMaxSize()) {
         if (messages.isEmpty() && isSystemReady) {
             // Empty state - system is ready
-            EmptyStateView()
+            EmptyStateView(language = screenUiState.selectedLanguage)
         } else {
             LazyColumn(
                 state = listState,
@@ -171,9 +246,16 @@ private fun ChatMessagesArea(
                     }
                 }
 
-                if (isInitializingLLM) {
+                if (isInitializingLLM || isDownloadingModel) {
                     item {
-                        InitializingMessage("Initializing AI model...")
+                        if (isDownloadingModel) {
+                            ModelDownloadMessage(
+                                progress = screenUiState.downloadProgress,
+                                status = screenUiState.downloadStatus
+                            )
+                        } else {
+                            InitializingMessage("Setting up AI model...")
+                        }
                     }
                 }
 
@@ -193,16 +275,16 @@ private fun ChatMessagesArea(
                 }
 
                 // Show streaming response if generating
-                if (isGenerating && screenUiState.response.isNotEmpty()) {
+                if (isGenerating) {
                     item {
                         ChatMessageItem(
-                            message = ChatMessage(
-                                content = screenUiState.response,
-                                isFromUser = false,
-                                isStreaming = true
-                            ),
-                            showTypingIndicator = screenUiState.isStreamingResponse
-                        )
+                                message = ChatMessage(
+                                    content = screenUiState.response ?: "",
+                                    isFromUser = false,
+                                    isStreaming = true
+                                ),
+                                showTypingIndicator = screenUiState.isStreamingResponse
+                            )
                     }
                 }
             }
@@ -211,34 +293,98 @@ private fun ChatMessagesArea(
 }
 
 @Composable
-private fun EmptyStateView() {
+fun LanguageSelector(
+    currentLanguage: AppLanguage,
+    onLanguageSelected: (AppLanguage) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Box {
+        // Current language display
+        Row(
+            modifier = Modifier
+                .clickable { expanded = true }
+                .padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = currentLanguage.flag,
+                fontSize = 20.sp
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = currentLanguage.code.uppercase(),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium
+            )
+        }
+
+        // Dropdown menu
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            AppLanguage.entries.forEach { language ->
+                DropdownMenuItem(
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = language.flag,
+                                fontSize = 18.sp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = language.displayName,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    },
+                    onClick = {
+                        onLanguageSelected(language)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyStateView(language: AppLanguage = AppLanguage.ENGLISH) {
     Column(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Icon(
-            imageVector = Icons.Default.Search,
+            imageVector = Icons.Default.Language,
             contentDescription = null,
             tint = Color.LightGray,
             modifier = Modifier.size(64.dp)
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-            text = "Ask me anything about the knowledge base!",
+            text = when (language) {
+                AppLanguage.RUSSIAN -> "Спросите меня о программе сезонных рабочих!"
+                AppLanguage.ENGLISH -> "Ask me about the Seasonal Worker Scheme!"
+            },
             style = MaterialTheme.typography.bodyLarge,
             color = Color.Gray,
             textAlign = TextAlign.Center
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "I'm ready to help you find information",
+            text = when (language) {
+                AppLanguage.RUSSIAN -> "Я готов помочь вам найти информацию"
+                AppLanguage.ENGLISH -> "I'm ready to help you find information"
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = Color.LightGray,
             textAlign = TextAlign.Center
         )
     }
 }
+
 
 @Composable
 private fun InitializingMessage(message: String = "Initializing...") {
@@ -300,6 +446,135 @@ private fun UserMessageBubble(content: String) {
     }
 }
 
+// NEW: Clear History Button Component
+@Composable
+private fun ClearHistoryButton(
+    currentLanguage: AppLanguage,
+    totalMessages: Int,
+    onClearHistory: () -> Unit
+) {
+    var showConfirmDialog by remember { mutableStateOf(false) }
+
+    // Only show button if there are messages to clear
+    if (totalMessages > 0) {
+        IconButton(
+            onClick = { showConfirmDialog = true }
+        ) {
+            Icon(
+                imageVector = Icons.Default.DeleteSweep,
+                contentDescription = when (currentLanguage) {
+                    AppLanguage.ENGLISH -> "Clear chat history"
+                    AppLanguage.RUSSIAN -> "Очистить историю чата"
+                },
+                tint = Color.Gray
+            )
+        }
+
+        // Confirmation dialog
+        if (showConfirmDialog) {
+            AlertDialog(
+                onDismissRequest = { showConfirmDialog = false },
+                title = {
+                    Text(
+                        text = when (currentLanguage) {
+                            AppLanguage.ENGLISH -> "Clear Chat History"
+                            AppLanguage.RUSSIAN -> "Очистить историю чата"
+                        }
+                    )
+                },
+                text = {
+                    Text(
+                        text = when (currentLanguage) {
+                            AppLanguage.ENGLISH -> "This will permanently delete all chat history in both languages. This action cannot be undone."
+                            AppLanguage.RUSSIAN -> "Это навсегда удалит всю историю чата на обоих языках. Это действие нельзя отменить."
+                        }
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            onClearHistory()
+                            showConfirmDialog = false
+                        }
+                    ) {
+                        Text(
+                            text = when (currentLanguage) {
+                                AppLanguage.ENGLISH -> "Clear"
+                                AppLanguage.RUSSIAN -> "Очистить"
+                            },
+                            color = Color.Red
+                        )
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { showConfirmDialog = false }
+                    ) {
+                        Text(
+                            text = when (currentLanguage) {
+                                AppLanguage.ENGLISH -> "Cancel"
+                                AppLanguage.RUSSIAN -> "Отмена"
+                            }
+                        )
+                    }
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ModelDownloadMessage(
+    progress: Int,
+    status: String
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start
+    ) {
+        Card(
+            modifier = Modifier.widthIn(max = 320.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            shape = RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.Top) {
+                    Icon(
+                        imageVector = Icons.Default.CloudDownload,
+                        contentDescription = null,
+                        tint = Color.Blue,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = status,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.Black
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Progress bar
+                        LinearProgressIndicator(
+                            progress = { progress / 100f },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color.Blue,
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "$progress%",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun AssistantMessageBubble(
     content: String,
@@ -316,13 +591,14 @@ private fun AssistantMessageBubble(
         Column(modifier = Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.Top) {
                 Icon(
-                    imageVector = Icons.Default.SmartToy,
+                    imageVector = Icons.Default.SupportAgent,
                     contentDescription = null,
                     tint = Color.Blue,
                     modifier = Modifier.size(16.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Column(modifier = Modifier.weight(1f)) {
+                    // Show content if available
                     if (content.isNotEmpty()) {
                         MarkdownText(
                             markdown = content,
@@ -333,37 +609,19 @@ private fun AssistantMessageBubble(
                         )
                     }
 
+                    // Show typing indicator
                     if (showTypingIndicator) {
-                        Spacer(modifier = Modifier.height(4.dp))
+                        // Add spacing only if there's content above
+                        if (content.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
                         TypingIndicator()
                     }
-                }
-            }
 
-            if (content.isNotEmpty() && !showTypingIndicator) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    IconButton(
-                        onClick = {
-                            val sendIntent = Intent().apply {
-                                action = Intent.ACTION_SEND
-                                putExtra(Intent.EXTRA_TEXT, content)
-                                type = "text/plain"
-                            }
-                            val shareIntent = Intent.createChooser(sendIntent, null)
-                            context.startActivity(shareIntent)
-                        },
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Share,
-                            contentDescription = "Share response",
-                            tint = Color.Gray,
-                            modifier = Modifier.size(16.dp)
-                        )
+                    // Ensure minimum height when showing only typing indicator
+                    if (content.isEmpty() && showTypingIndicator) {
+                        // This ensures the bubble has proper height even with just typing indicator
+                        Spacer(modifier = Modifier.height(0.dp))
                     }
                 }
             }
@@ -401,7 +659,8 @@ private fun TypingIndicator() {
 @Composable
 private fun ChatInputArea(
     onSendMessage: (String) -> Unit,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    language: AppLanguage = AppLanguage.ENGLISH
 ) {
     var messageText by remember { mutableStateOf("") }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -423,7 +682,10 @@ private fun ChatInputArea(
                 modifier = Modifier.weight(1f),
                 placeholder = {
                     Text(
-                        text = "Ask about the knowledge base...",
+                        text = when (language) {
+                            AppLanguage.RUSSIAN -> "Спросите о программе сезонных рабочих..."
+                            AppLanguage.ENGLISH -> "Ask about the Seasonal Worker Scheme..."
+                        },
                         color = Color.Gray
                     )
                 },
@@ -461,7 +723,10 @@ private fun ChatInputArea(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "Send message",
+                    contentDescription = when (language) {
+                        AppLanguage.RUSSIAN -> "Отправить сообщение"
+                        AppLanguage.ENGLISH -> "Send message"
+                    },
                     tint = Color.White
                 )
             }
@@ -474,8 +739,8 @@ private fun ChatInputArea(
 private fun ChatScreenPreview() {
     ChatScreen(
         screenUiState = ChatScreenUIState(
-            question = "What is the impact of Mumbai?",
-            response = "Mumbai is the financial capital of India and accounts for 25% of the nation's industrial output.",
+            question = "What kind of jobs can I do on seasonal work visa?",
+            response = "You can do jobs such as picking fruits and vegetables",
             isGeneratingResponse = false
         ),
         onScreenEvent = { },

@@ -7,8 +7,12 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import com.veedjohnson.workerbot.ui.screens.chat.ChatScreen
 import com.veedjohnson.workerbot.ui.screens.chat.ChatViewModel
+import com.veedjohnson.workerbot.ui.screens.splash.SplashScreen
 import org.koin.androidx.compose.koinViewModel
 
 class MainActivity : ComponentActivity() {
@@ -18,16 +22,25 @@ class MainActivity : ComponentActivity() {
         setContent {
             val viewModel: ChatViewModel = koinViewModel()
             val chatScreenUIState by viewModel.chatScreenUIState.collectAsState()
+            var showSplash by remember { mutableStateOf(true) }
 
-            // Initialize knowledge base on app start
-            LaunchedEffect(Unit) {
-                viewModel.initializeKnowledgeBase()
+            if (showSplash) {
+                SplashScreen(
+                    onSplashFinished = {
+                        showSplash = false
+                    }
+                )
+            } else {
+                // Initialize knowledge base when splash finishes and chat screen appears
+                LaunchedEffect(Unit) {
+                    viewModel.initializeKnowledgeBase()
+                }
+
+                ChatScreen(
+                    screenUiState = chatScreenUIState,
+                    onScreenEvent = { viewModel.onChatScreenEvent(it) },
+                )
             }
-
-            ChatScreen(
-                screenUiState = chatScreenUIState,
-                onScreenEvent = { viewModel.onChatScreenEvent(it) },
-            )
         }
     }
 }
