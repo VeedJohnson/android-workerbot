@@ -8,3 +8,17 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Android Studio / Kotlin build artifacts
+**/.kotlin/**
+**/errors/**/*.log
+
+# Release outputs
+app/release/
+*.apk
+app/release/**/*.dm
+app/release/output-metadata.json
+
+# Big assets you don’t want in Git
+app/src/main/assets/*.onnx
+models/*.task
