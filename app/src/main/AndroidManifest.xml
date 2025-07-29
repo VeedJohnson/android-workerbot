@@ -3,6 +3,10 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Make ARCore optional so the app can install on non-AR devices -->
+    <uses-feature
+        android:name="android.hardware.camera.ar"
+        android:required="false" />
 
     <application
         android:name=".WorkerBotApplication"

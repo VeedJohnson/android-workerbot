@@ -8,38 +8,49 @@ import com.veedjohnson.workerbot.ui.screens.chat.ChatMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.koin.core.annotation.Single
-import java.io.File
 
 @Single
 class MediaPipeLLMAPI(
     private val context: Context,
+    private val modelDownloader: ModelDownloaderService,
 ) {
     private var llmInference: LlmInference? = null
     private var isModelReady = false
+    private var warmSession: LlmInferenceSession? = null
+    private var isWarmSessionReady = false
 
-    suspend fun initializeModel(): Boolean = withContext(Dispatchers.IO) {
+
+    suspend fun initializeModel(  onDownloadProgress: (progress: Int, downloaded: Long, total: Long) -> Unit = { _, _, _ -> }): Boolean = withContext(Dispatchers.IO) {
         if (isModelReady) return@withContext true
 
         Log.i("MediaPipeLLM", "Starting init")
 
         try {
-            // Model file pushed via ADB
-            val modelFile = "/data/local/tmp/llm/gemma3-1b-it-int4.task"
+            // Step 1: Download model if needed
+            val downloadResult = modelDownloader.downloadModelIfNeeded(onDownloadProgress)
 
-            if (!File(modelFile).exists()) {
-                Log.e("MediaPipeLLM", "Model $modelFile not found")
-                return@withContext false
+            val modelPath = when (downloadResult) {
+                is ModelDownloadResult.Success -> {
+                    Log.i("MediaPipeLLM", "Model available at: ${downloadResult.modelPath}")
+                    downloadResult.modelPath
+                }
+                is ModelDownloadResult.Error -> {
+                    Log.e("MediaPipeLLM", "Model download failed: ${downloadResult.message}")
+                    return@withContext false
+                }
             }
 
             // 1. Configure LLM inference options
             val options = LlmInference.LlmInferenceOptions.builder()
-                .setModelPath(modelFile)
+                .setModelPath(modelPath)
                 .setMaxTokens(1024)
                 .setPreferredBackend(LlmInference.Backend.GPU)
                 .build()
 
             // 2. Create LLM inference engine (session created per request)
             llmInference = LlmInference.createFromOptions(context, options)
+
+            warmUpSession()
 
             isModelReady = true
             Log.i("MediaPipeLLM", "MediaPipe LLM initialized successfully")
@@ -55,9 +66,9 @@ class MediaPipeLLMAPI(
             LlmInferenceSession.createFromOptions(
                 llmInference!!,
                 LlmInferenceSession.LlmInferenceSessionOptions.builder()
-                    .setTopK(40)
-                    .setTopP(0.4f)
-                    .setTemperature(0.2f)
+                    .setTopK(15)
+                    .setTopP(0.6f)
+                    .setTemperature(0.1f)
                     .build()
             )
         } catch (e: Exception) {
@@ -66,55 +77,78 @@ class MediaPipeLLMAPI(
         }
     }
 
-    fun generateResponseStreaming(
-        prompt: String,
-        conversationHistory: List<ChatMessage> = emptyList(),
-        onPartialResponse: StreamingCallback
-    ) {
+    private fun warmUpSession() {
         try {
-            if (!isModelReady) {
-                onPartialResponse("Model not initialized", true)
-                return
-            }
+            // Create and keep a warm session ready
+            warmSession = createFreshSession()
+            isWarmSessionReady = true
 
-            // Create fresh session for each request
-            val session = createFreshSession()
-            if (session == null) {
-                onPartialResponse("Failed to create session", true)
-                return
-            }
-
-            // Build prompt with conversation history
-            val fullPrompt = buildPromptWithHistory(prompt, conversationHistory)
-
-            Log.d("MediaPipeLLM", "Fresh session created. Prompt length: ${fullPrompt.length}")
-            Log.d("MediaPipeLLM", "Full prompt preview: ${fullPrompt.take(200)}...")
-
-            session.addQueryChunk(fullPrompt)
-            session.generateResponseAsync { partialResult, done ->
-                onPartialResponse(partialResult, done)
-                if (done) {
-                    // Clean up session after use
-                    try {
-                        session.close()
-                        Log.d("MediaPipeLLM", "Session closed after response completion")
-                    } catch (e: Exception) {
-                        Log.w("MediaPipeLLM", "Error closing session", e)
-                    }
+            // Optional: Run a tiny warm-up inference to prepare GPU/CPU caches
+            warmSession?.let { session ->
+                try {
+                    // Use a minimal prompt to warm up the model without waiting for response
+                    session.addQueryChunk("Hi")
+                    Log.d("MediaPipeLLM", "Session warmed up successfully")
+                } catch (e: Exception) {
+                    Log.w("MediaPipeLLM", "Warm-up query failed, but session is ready", e)
                 }
             }
         } catch (e: Exception) {
-            Log.e("MediaPipeLLM", "Error in streaming response", e)
-            onPartialResponse("I'm sorry, but I don't have that information. For more help, please contact FiftyEight at https://fiftyeight.io/contact/", true)
+            Log.w("MediaPipeLLM", "Failed to create warm session", e)
+            isWarmSessionReady = false
         }
+    }
+
+    suspend fun generateResponseStreaming(
+        prompt: String,
+        conversationHistory: List<ChatMessage> = emptyList(),
+        onPartialResponse: StreamingCallback
+    ) = withContext(Dispatchers.IO) {
+
+            try {
+                if (!isModelReady) {
+                    onPartialResponse("Model not initialized", true)
+                    return@withContext
+                }
+
+                // Create fresh session for each request
+                val session = createFreshSession()
+                if (session == null) {
+                    onPartialResponse("Failed to create session", true)
+                    return@withContext
+                }
+
+                // Build prompt with conversation history
+                val fullPrompt = buildPromptWithHistory(prompt, conversationHistory)
+
+                Log.d("MediaPipeLLM", "Fresh session created. Prompt length: ${fullPrompt.length}")
+                Log.d("MediaPipeLLM", "Full prompt preview: ${fullPrompt.take(200)}...")
+
+                session.addQueryChunk(fullPrompt)
+                session.generateResponseAsync { partialResult, done ->
+                    onPartialResponse(partialResult, done)
+                    if (done) {
+                        // Clean up session after use
+                        try {
+                            session.close()
+                            Log.d("MediaPipeLLM", "Session closed after response completion")
+                        } catch (e: Exception) {
+                            Log.w("MediaPipeLLM", "Error closing session", e)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("MediaPipeLLM", "Error in streaming response", e)
+                onPartialResponse("I'm sorry, but I don't have that information. For more help, please contact FiftyEight at https://fiftyeight.io/contact/", true)
+            }
+
     }
 
     private fun buildPromptWithHistory(
         currentPrompt: String,
         conversationHistory: List<ChatMessage>
     ): String {
-        // Take last 4 messages (2 Q&A pairs) to stay within token limits
-        val recentHistory = conversationHistory.takeLast(4)
+        val recentHistory = conversationHistory.takeLast(2)
 
         return if (recentHistory.isNotEmpty()) {
             val historyText = recentHistory.joinToString("\n\n") { message ->
@@ -141,22 +175,28 @@ class MediaPipeLLMAPI(
     fun buildRagPrompt(userQuery: String, context: String): String {
         return (
             """
-            You are a UK Seasonal Worker Scheme expert. Answer the user's question using ONLY the context information provided below. Do not mention source documents. Speak directly and clearly.
-            
-            IMPORTANT: If the context contains the answer, provide it clearly. Only say you don't have the information if the context truly doesn't contain relevant details.
-            
-            Make sure to include any relevant links from the context.
-            
-            If you cannot find the answer in the context below, reply as such: "I'm sorry, but I don't have that information. For more help, please contact FiftyEight at https://fiftyeight.io/contact/"
-            
-            ─── CONTEXT ───
-            $context
-            
-            ─── USER QUESTION ───
-            $userQuery
-            
-            Answer:
-            """.trimIndent())
+          You are WorkerBot, a friendly and knowledgeable assistant helping people understand the UK Seasonal Worker Scheme.
+
+Your personality:
+• Helpful and approachable, like a knowledgeable colleague
+• You explain things clearly without overwhelming people
+• You focus on what's most important for the person asking
+
+How to respond:
+• For greetings: Be warm and ask how you can help with the scheme
+• For questions about the scheme: Give clear, concise answers supported by the available information below
+• Keep answers short (2-3 sentences) unless more detail is specifically needed
+• Explain things in everyday language, not official jargon
+• Only include URLs if they directly help with the person's question
+
+If you can't answer from the available information: "I don't have that specific information. For more details, contact FiftyEight at https://fiftyeight.io/contact/"
+
+Available information: $context
+
+Person asks: $userQuery
+
+Your helpful response:
+          """.trimIndent())
     }
 
     fun cleanup() {
