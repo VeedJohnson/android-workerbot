@@ -20,5 +20,4 @@ app/release/**/*.dm
 app/release/output-metadata.json
 
 # Big assets you don’t want in Git
-app/src/main/assets/*.onnx
-models/*.task
+# app/src/main/assets/*.onnx
