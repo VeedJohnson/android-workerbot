@@ -3,6 +3,7 @@ package com.veedjohnson.workerbot.domain
 import android.content.Context
 import android.util.Log
 import com.veedjohnson.workerbot.BuildConfig
+import com.veedjohnson.workerbot.data.ModelConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.koin.core.annotation.Single
@@ -16,8 +17,8 @@ import java.net.URL
 class ModelDownloaderService(private val context: Context) {
 
     companion object {
-        private const val MODEL_URL = "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.task"
-        private const val MODEL_FILENAME = "gemma3-1b-it-int4.task"
+        private const val MODEL_URL = ModelConfig.CURRENT_MODEL_URL
+        private const val MODEL_FILENAME = ModelConfig.CURRENT_MODEL_FILENAME
         private val HF_TOKEN = BuildConfig.HF_TOKEN.takeIf { it.isNotEmpty() }
     }
 

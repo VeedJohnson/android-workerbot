@@ -44,7 +44,7 @@ class MediaPipeLLMAPI(
             val options = LlmInference.LlmInferenceOptions.builder()
                 .setModelPath(modelPath)
                 .setMaxTokens(1024)
-                .setPreferredBackend(LlmInference.Backend.GPU)
+                .setPreferredBackend(LlmInference.Backend.CPU)
                 .build()
 
             // 2. Create LLM inference engine (session created per request)
@@ -184,8 +184,8 @@ Your personality:
 
 How to respond:
 • For greetings: Be warm and ask how you can help with the scheme
-• For questions about the scheme: Give clear, concise answers supported by the available information below
-• Keep answers short (2-3 sentences) unless more detail is specifically needed
+• For questions about the scheme: Give clear, CONCISE conversational answers supported by the available information below
+• You must keep answers short (1-2 sentences) unless more detail is specifically needed
 • Explain things in everyday language, not official jargon
 • Only include URLs if they directly help with the person's question
 

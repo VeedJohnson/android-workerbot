@@ -22,6 +22,7 @@ tasksGenai = "0.10.24"
 tasksText = "0.20230731"
 common = "18.11.0"
 translate = "17.0.1"
+roomCompiler = "2.7.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -57,6 +58,7 @@ tasks-genai = { module = "com.google.mediapipe:tasks-genai", version.ref = "task
 tasks-text = { module = "com.google.mediapipe:tasks-text", version.ref = "tasksText" }
 common = { group = "com.google.mlkit", name = "common", version.ref = "common" }
 translate = { module = "com.google.mlkit:translate", version.ref = "translate" }
+androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "roomCompiler" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

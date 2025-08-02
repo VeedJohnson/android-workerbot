@@ -1,9 +1,15 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.jetbrains.kotlin.android)
     alias(libs.plugins.compose.compiler)
     id("com.google.devtools.ksp")
     kotlin("plugin.serialization") version "2.0.21"
+}
+
+configurations.all {
+    exclude(group = "com.intellij", module = "annotations")
 }
 
 android {
@@ -18,6 +24,10 @@ android {
         versionName = "0.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        val properties = Properties()
+        properties.load(project.rootProject.file("local.properties").inputStream())
+        buildConfigField("String", "HF_TOKEN", "\"${properties.getProperty("HF_TOKEN")}\"")
+
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -32,16 +42,12 @@ android {
     }
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
             signingConfig = signingConfigs.getByName("release")
-            buildConfigField("String", "HF_TOKEN", "\"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\"")
-        }
-        debug {
-            buildConfigField("String", "HF_TOKEN", "\"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\"")
         }
     }
     compileOptions {
@@ -58,6 +64,7 @@ android {
     packaging {
         resources {
             excludes += "META-INF/DEPENDENCIES"
+            excludes += "/META-INF/{DEPENDENCIES,gradle/incremental.annotation.processors}"
         }
     }
     applicationVariants.configureEach {
@@ -99,6 +106,7 @@ dependencies {
     // ML Kit Translation
     implementation(libs.language.id)
     implementation(libs.translate)
+    implementation(libs.androidx.room.compiler)
 
     // ObjectBox - vector database
     debugImplementation(libs.objectbox.android.objectbrowser)
