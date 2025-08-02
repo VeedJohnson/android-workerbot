@@ -1,55 +1,65 @@
-# On-Device RAG-Powered Android Knowledge Base Assistant
+# On-Device RAG WorkerBot Android App
 
-> An offline-first Android app that ships with a built-in text knowledge base, breaks it into chunks, embeds & indexes them on-device, and answers user questions via a local LLM (MediaPipe GenAI).
+This repository contains an Android application that implements Retrieval-Augmented Generation (RAG) on-device using MediaPipe for LLM inference and an in‑memory vector store for fast context retrieval.
+
+## Prerequisites
+
+1. **Android Studio**
+2. **JDK 21**
+3. **ADB access** to a physical device with API 26+
+4. **Hugging Face access token** with permission to download the task model
+
+## Getting Started
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/VeedJohnson/android-workerbot
+cd android-workerbot
+```
+
+### 2. Configure Local Properties
+
+Create (or update) the file `local.properties` in the root of the project with your Hugging Face token:
+
+```properties
+# local.properties
+HF_TOKEN=hf_xxxYourTokenHere
+```
+
+The Gradle build reads `HF_TOKEN` and embeds it into `BuildConfig.HF_TOKEN` at compile time.
+
+### 3. Set Up Model Download
+
+On first app launch, the model will be downloaded from Hugging Face and cached in the app's private storage.\
+**Ensure your device has Internet access.**
+
+### 4. Build & Run
+
+1. Open the project in Android Studio.
+2. Let Gradle sync and build.
+3. Connect an Android device.
+4. Run the `app` configuration.
+
+*On success, the splash screen will appear, initialize the knowledge base, download the model, and open the chat interface.*
+
+### 5. Permissions
+
+No special Android permissions are required beyond network access.
+
+## Project Structure
+
+- `app/src/main/java/com/veedjohnson/workerbot`: Kotlin source
+  - `domain/`: LLM API, model downloader, RAG prompt builder
+  - `data/`: ObjectBox definitions and DB helpers
+  - `ui/`: Compose screens (Splash, Chat)
+- `app/src/main/assets/`: Static knowledge base text file(s) and embedder
+- `ModelDownloaderService.kt`: Fetches and caches the `.task` file
+- `LLMAPI.kt`: Wraps MediaPipe LLM inference
+
+## Troubleshooting
+
+- **Download failures:** Check network and valid HF token.
+- **Out-Of-Range errors:** Ensure model’s `maxTokens` ≤ model’s context window.
 
 ---
-
-## 🚀 Features
-
-- **Pre-loaded TXT KB**  
-  At first launch we load `knowledge_base_eng.txt` (in `assets/`) into a local NoSQL/vector store.
-
-- **Whitespace Chunking**  
-  We split text on paragraphs and words with overlap to preserve context boundaries.
-
-- **On-Device Embeddings**  
-  Generate 384-dim embeddings for each chunk via a lightweight MediaPipe Text Embedder.
-
-- **Vector Store**  
-  Ingest embeddings into an ObjectBox-backed in-memory vector database.
-
-- **Retrieval Augmented Generation**  
-  • **Retrieve** top-K similar chunks for each query  
-  • **Augment** user query with retrieved context  
-  • **Answer** via an on-device LLM (Mediapipe GenAI / Gemini Android SDK)
-
-- **Streaming Responses**  
-  Partial outputs appear in the UI as soon as they’re generated.
-
-- **Koin DI**  
-  All core components (KB loader, splitter, embeddings, ObjectBox, LLM) are wired via Koin.
-
----
-
-## 📦 Setup
-
-1. **Clone & open**
-   ```bash
-   git clone 
-   cd Repo
-   ./gradlew :app:build
-   
-2. **Push model to device**
-   During development, push the on‑device LLM model via ADB:
-   ```bash
-   adb shell rm -rf /data/local/tmp/llm
-   adb shell mkdir -p /data/local/tmp/llm
-   adb push android/models/gemma3-1b-it-int4.task /data/local/tmp/llm/
-
-3. **Run on device**  
-   - Launch from Android Studio  
-   - On first launch the app will:  
-     1. Load `knowledge_base_eng.txt` from `assets/`  
-     2. Chunk & embed it  
-     3. Index in ObjectBox  
-     4. Initialize the MediaPipe LLM session  
