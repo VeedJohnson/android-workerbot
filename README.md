@@ -5,9 +5,15 @@ This repository contains an Android application that implements Retrieval-Augmen
 ## Prerequisites
 
 1. **Android Studio**
-2. **JDK 21**
+2. **JDK 17**
 3. **ADB access** to a physical device with API 26+
 4. **Hugging Face access token** with permission to download the task model
+
+## Features
+ - English chat 
+ - Russian translation 
+ - Speech to text 
+ - Chat persistence
 
 ## Getting Started
 
