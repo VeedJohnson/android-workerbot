@@ -9,6 +9,22 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.koin.core.annotation.Single
 
+
+sealed class LLMInitializationResult {
+    data class Success(val backendUsed: String) : LLMInitializationResult()
+    data class Failure(val errorMessage: String, val errorType: LLMErrorType) : LLMInitializationResult()
+}
+
+enum class LLMErrorType {
+    DOWNLOAD_FAILED,
+    GPU_FAILED,
+    CPU_FAILED,
+    BOTH_BACKENDS_FAILED,
+    WARMUP_FAILED,
+    UNKNOWN_ERROR
+}
+
+
 @Single
 class MediaPipeLLMAPI(
     private val context: Context,
@@ -20,44 +36,95 @@ class MediaPipeLLMAPI(
     private var isWarmSessionReady = false
 
 
-    suspend fun initializeModel(  onDownloadProgress: (progress: Int, downloaded: Long, total: Long) -> Unit = { _, _, _ -> }): Boolean = withContext(Dispatchers.IO) {
-        if (isModelReady) return@withContext true
+    suspend fun initializeModel(  onDownloadProgress: (progress: Int, downloaded: Long, total: Long) -> Unit = { _, _, _ -> }): LLMInitializationResult = withContext(Dispatchers.IO) {
+        if (isModelReady) return@withContext LLMInitializationResult.Success("Already Ready")
 
         Log.i("MediaPipeLLM", "Starting init")
 
         try {
             // Step 1: Download model if needed
-            val downloadResult = modelDownloader.downloadModelIfNeeded(onDownloadProgress)
+            val modelPath: String = try {
+                val downloadResult = modelDownloader.downloadModelIfNeeded(onDownloadProgress)
 
-            val modelPath = when (downloadResult) {
-                is ModelDownloadResult.Success -> {
-                    Log.i("MediaPipeLLM", "Model available at: ${downloadResult.modelPath}")
-                    downloadResult.modelPath
+                when (downloadResult) {
+                    is ModelDownloadResult.Success -> {
+                        Log.i("MediaPipeLLM", "Model available at: ${downloadResult.modelPath}")
+
+                        downloadResult.modelPath
+                    }
+                    is ModelDownloadResult.Error -> {
+                        val errorMsg = "Model download failed: ${downloadResult.message}"
+
+                        Log.e("MediaPipeLLM", "Model download failed: ${downloadResult.message}")
+
+
+                        return@withContext LLMInitializationResult.Failure(errorMsg, LLMErrorType.DOWNLOAD_FAILED)
+                    }
                 }
-                is ModelDownloadResult.Error -> {
-                    Log.e("MediaPipeLLM", "Model download failed: ${downloadResult.message}")
-                    return@withContext false
+            } catch (e: Exception) {
+                val msg = "Model download failed: ${e.localizedMessage}"
+                return@withContext LLMInitializationResult.Failure(msg, LLMErrorType.DOWNLOAD_FAILED)
+            }
+
+
+            var backendUsed = "Unknown"
+
+            // Try GPU first
+            try {
+
+                Log.i("MediaPipeLLM", "Attempting to initialize with GPU backend...")
+
+                val gpuOptions = LlmInference.LlmInferenceOptions.builder()
+                    .setModelPath(modelPath)
+                    .setMaxTokens(1024)
+                    .setPreferredBackend(LlmInference.Backend.GPU)
+                    .build()
+
+                llmInference = LlmInference.createFromOptions(context, gpuOptions)
+                backendUsed = "GPU"
+
+                Log.i("MediaPipeLLM", "Successfully initialized with GPU backend")
+
+            } catch (e: Exception) {
+                Log.w("MediaPipeLLM", "GPU backend failed, falling back to CPU: ${e.message}")
+
+                // Fallback to CPU
+                try {
+                    val cpuOptions = LlmInference.LlmInferenceOptions.builder()
+                        .setModelPath(modelPath)
+                        .setMaxTokens(1024)
+                        .setPreferredBackend(LlmInference.Backend.CPU)
+                        .build()
+
+                    llmInference = LlmInference.createFromOptions(context, cpuOptions)
+                    backendUsed = "CPU"
+                    Log.i("MediaPipeLLM", "Successfully initialized with CPU backend")
+
+
+                } catch (cpuException: Exception) {
+
+                    Log.e("MediaPipeLLM", "Both GPU and CPU backends failed", cpuException)
+                    return@withContext LLMInitializationResult.Failure(
+                        "Both backends failed: ${e.localizedMessage}",
+                        LLMErrorType.BOTH_BACKENDS_FAILED
+                    )
                 }
             }
 
-            // 1. Configure LLM inference options
-            val options = LlmInference.LlmInferenceOptions.builder()
-                .setModelPath(modelPath)
-                .setMaxTokens(1024)
-                .setPreferredBackend(LlmInference.Backend.GPU)
-                .build()
-
-            // 2. Create LLM inference engine (session created per request)
-            llmInference = LlmInference.createFromOptions(context, options)
+            Log.i("MediaPipeLLM", "LLM initialized using $backendUsed backend")
 
             warmUpSession()
 
             isModelReady = true
             Log.i("MediaPipeLLM", "MediaPipe LLM initialized successfully")
-            true
+
+
+            return@withContext LLMInitializationResult.Success(backendUsed)
         } catch (e: Exception) {
             Log.e("MediaPipeLLM", "MediaPipe LLM init failed", e)
-            false
+
+            val errorMsg = "Critical LLM initialization error: ${e.message}"
+            return@withContext LLMInitializationResult.Failure(errorMsg, LLMErrorType.UNKNOWN_ERROR)
         }
     }
 
@@ -67,13 +134,13 @@ class MediaPipeLLMAPI(
                 llmInference!!,
                 LlmInferenceSession.LlmInferenceSessionOptions.builder()
                     .setTopK(15)
-                    .setTopP(0.6f)
+                    .setTopP(0.5f)
                     .setTemperature(0.1f)
                     .build()
             )
         } catch (e: Exception) {
             Log.e("MediaPipeLLM", "Failed to create fresh session", e)
-            null
+            throw e
         }
     }
 
@@ -187,7 +254,7 @@ How to respond:
 • For questions about the scheme: Give clear, CONCISE conversational answers supported by the available information below
 • You must keep answers short (1-2 sentences) unless more detail is specifically needed
 • Explain things in everyday language, not official jargon
-• Only include URLs if they directly help with the person's question
+• Only include URLs if they directly help with the person's question and they are in the available information
 
 If you can't answer from the available information: "I don't have that specific information. For more details, contact FiftyEight at https://fiftyeight.io/contact/"
 

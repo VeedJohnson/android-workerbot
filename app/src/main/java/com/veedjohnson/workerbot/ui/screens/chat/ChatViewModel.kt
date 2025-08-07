@@ -15,6 +15,8 @@ import com.veedjohnson.workerbot.domain.KnowledgeBaseLoader
 import com.veedjohnson.workerbot.domain.MediaPipeLLMAPI
 import com.veedjohnson.workerbot.domain.SentenceEmbeddingProvider
 import com.veedjohnson.workerbot.domain.Chunker
+import com.veedjohnson.workerbot.domain.LLMErrorType
+import com.veedjohnson.workerbot.domain.LLMInitializationResult
 import com.veedjohnson.workerbot.domain.TranslationService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +29,7 @@ import org.koin.android.annotation.KoinViewModel
 sealed interface ChatScreenUIEvent {
     data class LanguageChanged(val language: AppLanguage) : ChatScreenUIEvent
     data object ClearAllChatHistory : ChatScreenUIEvent
+    data object ToggleDebugMode : ChatScreenUIEvent
 
     sealed class ResponseGeneration {
         data class Start(
@@ -42,6 +45,26 @@ sealed interface ChatScreenUIEvent {
             val errorMessage: String,
         ) : ChatScreenUIEvent
     }
+
+    sealed class ErrorDialog {
+        data class Show(
+            val title: String,
+            val message: String,
+            val type: ErrorType = ErrorType.GENERAL
+        ) : ChatScreenUIEvent
+        data object Dismiss : ChatScreenUIEvent
+        data object  Retry : ChatScreenUIEvent
+        data object ExitApp : ChatScreenUIEvent
+        }
+    }
+
+
+enum class ErrorType {
+    GENERAL,
+    KNOWLEDGE_BASE_FAILED,
+    LLM_FAILED,
+    DOWNLOAD_FAILED,
+    SYSTEM_FAILED
 }
 
 data class ChatScreenUIState(
@@ -52,6 +75,7 @@ data class ChatScreenUIState(
     val retrievedContextList: List<RetrievedContext> = emptyList(),
     val isInitializingKnowledgeBase: Boolean = false,
     val isInitializingLLM: Boolean = false,
+    val isInitializingTranslator: Boolean = false,
     val isSystemReady: Boolean = false,
     val isDownloadingModel: Boolean = false,
     val downloadProgress: Int = 0,
@@ -61,6 +85,16 @@ data class ChatScreenUIState(
     // Separate histories for each language
     val englishConversationHistory: List<ChatMessage> = emptyList(),
     val russianConversationHistory: List<ChatMessage> = emptyList(),
+    val translationAvailable: Boolean = true,
+
+    //error dialog
+    val showErrorDialog: Boolean = false,
+    val errorDialogTitle: String = "",
+    val errorDialogMessage: String = "",
+    val errorDialogType: ErrorType = ErrorType.GENERAL,
+
+    val debugLogs: List<String> = emptyList(),
+    val showDebugLogs: Boolean = false,
 )
 
 @KoinViewModel
@@ -78,7 +112,7 @@ class ChatViewModel(
     private val _chatScreenUIState = MutableStateFlow(ChatScreenUIState())
     val chatScreenUIState: StateFlow<ChatScreenUIState> = _chatScreenUIState
 
-    fun initializeKnowledgeBase() {
+    fun initializeSystemComponents() {
         viewModelScope.launch(Dispatchers.IO) {
             // Initialize both knowledge base and LLM
             initializeSystem()
@@ -93,142 +127,71 @@ class ChatViewModel(
         var translationReady = false
 
         try {
-            // Step 1: Initialize Knowledge Base
-            withContext(Dispatchers.Main) {
-                _chatScreenUIState.value = _chatScreenUIState.value.copy(
-                    isInitializingKnowledgeBase = true
-                )
+            //addDebugLog("🔄 Starting system initialization...")
+
+            // Step 1: Initialize Knowledge Base (CRITICAL - Stop if fails)
+            if (!initializeKnowledgeBase()) {
+                // Knowledge Base failed - stop everything
+                //addDebugLog("💥 Knowledge Base initialization failed - stopping system initialization")
+                onChatScreenEvent(ChatScreenUIEvent.ErrorDialog.Show(
+                    title = "Knowledge Base Failed",
+                    message = "Failed to load the knowledge base. The app cannot function without it. Please restart the app and try again.",
+                    type = ErrorType.KNOWLEDGE_BASE_FAILED
+                ))
+                return // Exit early
             }
-
-            Log.d("ChatViewModel", "Starting knowledge base initialization...")
-
-            processKnowledgeBase()
-            Log.d("ChatViewModel", "Knowledge base processed successfully")
             knowledgeBaseReady = true
+            //addDebugLog("✅ Knowledge base ready!")
 
-            withContext(Dispatchers.Main) {
-                _chatScreenUIState.value = _chatScreenUIState.value.copy(
-                    isInitializingKnowledgeBase = false
-                )
-                Toast.makeText(
-                    application,
-                    "Knowledge base loaded successfully!",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-            var isActuallyDownloading = false
-
-            // Step 2: Initialize LLM Model
-            withContext(Dispatchers.Main) {
-                _chatScreenUIState.value = _chatScreenUIState.value.copy(
-                    isInitializingLLM = true,
-                )
-            }
-
-            Log.d("ChatViewModel", "Starting LLM initialization with download...")
-            llmReady = mediaPipeLLM.initializeModel { progress, downloaded, total ->
-                // Update download progress on main thread
-                viewModelScope.launch(Dispatchers.Main) {
-                    val downloadedMB = downloaded / (1024 * 1024)
-                    val totalMB = total / (1024 * 1024)
-
-                    val isDownloading = downloaded > 0 && total > 0 && downloaded < total
-
-                    // Set downloading flag only when actual download is happening
-                    if (isDownloading && !isActuallyDownloading) {
-                        isActuallyDownloading = true
-                        Log.d("ChatViewModel", "Actual download detected, switching to download mode")
-                    }
-
-                    val status = when {
-                        // Model preparation phase (no download)
-                        !isDownloading && progress < 100 -> "Preparing AI model..."
-
-                        // Active download phase
-                        isDownloading -> "Downloading AI model: ${downloadedMB}MB / ${totalMB}MB"
-
-                        // Download completed, now preparing
-                        downloadedMB > 0 && downloadedMB == totalMB -> "Setting up AI model..."
-
-                        // Default preparation
-                        else -> "Loading AI model..."
-                    }
-
-                    _chatScreenUIState.value = _chatScreenUIState.value.copy(
-                        isDownloadingModel = isActuallyDownloading,
-                        downloadProgress = progress,
-                        downloadStatus = status,
-                    )
+            // Step 2: Initialize LLM Model (CRITICAL - Stop if fails)
+            when (val llmResult = initializeLLMModel()) {
+                is LLMInitializationResult.Success -> {
+                    llmReady = true
+                   // addDebugLog("✅ LLM ready using ${llmResult.backendUsed} backend!")
+                }
+                is LLMInitializationResult.Failure -> {
+                    // LLM failed - stop everything
+                   // addDebugLog("💥 LLM initialization failed - stopping system initialization")
+                    val (title, message) = getErrorTitleAndMessage(llmResult)
+                    onChatScreenEvent(ChatScreenUIEvent.ErrorDialog.Show(
+                        title = title,
+                        message = message,
+                        type = ErrorType.LLM_FAILED
+                    ))
+                    return // Exit early
                 }
             }
 
-            withContext(Dispatchers.Main) {
-                _chatScreenUIState.value = _chatScreenUIState.value.copy(
-                    downloadProgress = if (llmReady) 100 else 0,
-                    isDownloadingModel = false,
-                    downloadStatus = if (llmReady) "AI model ready!" else "Download failed"
-                )
-            }
-
-            Log.d("ChatViewModel", "LLM initialization result: $llmReady")
-
-            if (llmReady) {
+            // Step 3: Initialize Translation Service (NON-CRITICAL - Continue if fails)
+            translationReady = initializeTranslationService()
+            if (!translationReady) {
+                // Translation failed, but system can still work with English only
+               // addDebugLog("⚠️ Translation service failed - continuing with English only")
                 withContext(Dispatchers.Main) {
                     Toast.makeText(
                         application,
-                        "AI model loaded successfully!",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-            } else {
-                Log.e("ChatViewModel", "LLM initialization failed")
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        application,
-                        "Failed to load AI model",
+                        "Translation service unavailable. Only English chat will be available.",
                         Toast.LENGTH_LONG
                     ).show()
                 }
+            } else {
+                //addDebugLog("✅ Translation service ready!")
             }
-
-            // Step 3: Initialize Translation Service (NEW)
-            Log.d("ChatViewModel", "Starting translation service initialization...")
-            translationReady = translationService.initializeTranslators()
-            Log.d("ChatViewModel", "Translation service result: $translationReady")
-
 
         } catch (e: Exception) {
-            Log.e("ChatViewModel", "Initialization error", e)
-            withContext(Dispatchers.Main) {
-                Toast.makeText(
-                    application,
-                    "Initialization failed: ${e.message}",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
+
+            onChatScreenEvent(ChatScreenUIEvent.ErrorDialog.Show(
+                title = "System Error",
+                message = "A critical error occurred during initialization: ${e.message ?: "Unknown error"}. Please restart the app.",
+                type = ErrorType.SYSTEM_FAILED
+            ))
+            return
         } finally {
-            withContext(Dispatchers.Main) {
-                _chatScreenUIState.value = _chatScreenUIState.value.copy(
-                    isInitializingKnowledgeBase = false,
-                    isInitializingLLM = false,
-                    isDownloadingModel = false,
-                    isSystemReady = knowledgeBaseReady && llmReady && translationReady
-                )
-
-                Log.d("ChatViewModel", "Final state - KB: $knowledgeBaseReady, LLM: $llmReady, Ready: ${knowledgeBaseReady && llmReady}")
-
-                if (knowledgeBaseReady && llmReady && translationReady) {
-                    Toast.makeText(
-                        application,
-                        "System ready! You can start chatting.",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                } else {
-                    Log.e("ChatViewModel", "System initialization incomplete - KB: $knowledgeBaseReady, LLM: $llmReady")
-                }
-            }
+            updateFinalSystemState(knowledgeBaseReady, llmReady, translationReady)
         }
     }
+
+
 
     private fun processKnowledgeBase() {
         try {
@@ -268,8 +231,9 @@ class ChatViewModel(
             Log.d("ChatViewModel", "Creating structured chunks...")
             val chunks = Chunker.createStructuredChunks(
                 knowledgeBaseText,
-                maxChunkSize = 400
+                maxChunkSize = 300
             )
+
             Log.d("ChatViewModel", "Created ${chunks.size} structured chunks")
 
             // Log first few chunks to verify quality
@@ -295,6 +259,191 @@ class ChatViewModel(
         } catch (e: Exception) {
             Log.e("ChatViewModel", "Error processing knowledge base", e)
             throw e
+        }
+    }
+
+    private suspend fun initializeKnowledgeBase(): Boolean {
+        return try {
+            withContext(Dispatchers.Main) {
+                _chatScreenUIState.value = _chatScreenUIState.value.copy(
+                    isInitializingKnowledgeBase = true
+                )
+            }
+
+            //addDebugLog("📚 Initializing knowledge base...")
+            processKnowledgeBase()
+            //addDebugLog("✅ Knowledge base processed successfully")
+
+            withContext(Dispatchers.Main) {
+                _chatScreenUIState.value = _chatScreenUIState.value.copy(
+                    isInitializingKnowledgeBase = false
+                )
+            }
+            true
+        } catch (e: Exception) {
+            //addDebugLog("❌ Knowledge base initialization failed: ${e.message}")
+            withContext(Dispatchers.Main) {
+                _chatScreenUIState.value = _chatScreenUIState.value.copy(
+                    isInitializingKnowledgeBase = false
+                )
+            }
+            false
+        }
+    }
+
+    private suspend fun initializeLLMModel(): LLMInitializationResult {
+        return try {
+            withContext(Dispatchers.Main) {
+                _chatScreenUIState.value = _chatScreenUIState.value.copy(
+                    isInitializingLLM = true
+                )
+            }
+
+            var isActuallyDownloading = false
+
+            val result = mediaPipeLLM.initializeModel(
+                onDownloadProgress = { progress, downloaded, total ->
+                    viewModelScope.launch(Dispatchers.Main) {
+                        val downloadedMB = downloaded / (1024 * 1024)
+                        val totalMB = total / (1024 * 1024)
+                        val isDownloading = downloaded > 0 && total > 0 && downloaded < total
+
+                        if (isDownloading && !isActuallyDownloading) {
+                            isActuallyDownloading = true
+                        }
+
+                        val status = when {
+                            !isDownloading && progress < 100 -> "Preparing AI model..."
+                            isDownloading -> "Downloading AI model: ${downloadedMB}MB / ${totalMB}MB"
+                            downloadedMB > 0 && downloadedMB == totalMB -> "Setting up AI model..."
+                            else -> "Loading AI model..."
+                        }
+
+                        _chatScreenUIState.value = _chatScreenUIState.value.copy(
+                            isDownloadingModel = isActuallyDownloading,
+                            downloadProgress = progress,
+                            downloadStatus = status,
+                        )
+                    }
+                },
+            )
+
+            // Update UI with final download status
+            withContext(Dispatchers.Main) {
+                _chatScreenUIState.value = _chatScreenUIState.value.copy(
+                    downloadProgress = if (result is LLMInitializationResult.Success) 100 else 0,
+                    isDownloadingModel = false,
+                    downloadStatus = if (result is LLMInitializationResult.Success) "AI model ready!" else "AI model failed",
+                    isInitializingLLM = false
+                )
+            }
+
+            result
+        } catch (e: Exception) {
+            withContext(Dispatchers.Main) {
+                _chatScreenUIState.value = _chatScreenUIState.value.copy(
+                    isInitializingLLM = false,
+                    isDownloadingModel = false
+                )
+            }
+            LLMInitializationResult.Failure("Critical LLM error: ${e.message}", LLMErrorType.UNKNOWN_ERROR)
+        }
+    }
+
+    private suspend fun initializeTranslationService(): Boolean {
+        return try {
+            withContext(Dispatchers.Main) {
+                _chatScreenUIState.value = _chatScreenUIState.value.copy(
+                    isInitializingTranslator = true
+                )
+            }
+
+            val result = translationService.initializeTranslators()
+
+            result
+        } catch (e: Exception) {
+
+            false
+        } finally {
+            withContext(Dispatchers.Main) {
+                _chatScreenUIState.value = _chatScreenUIState.value.copy(
+                    isInitializingTranslator = false
+                )
+            }
+        }
+    }
+
+    private fun getErrorTitleAndMessage(result: LLMInitializationResult.Failure): Pair<String, String> {
+        return when (result.errorType) {
+            LLMErrorType.DOWNLOAD_FAILED ->
+                "Download Failed" to "Failed to download the AI model. Please check your internet connection and try again."
+
+            LLMErrorType.BOTH_BACKENDS_FAILED ->
+                "Device Compatibility Issue" to "Your device doesn't support the AI model. Both GPU and CPU initialization failed.\n\nThis may be due to insufficient memory or unsupported hardware.\n\nTechnical details: ${result.errorMessage}"
+
+            LLMErrorType.GPU_FAILED ->
+                "GPU Issue" to "GPU acceleration failed, but CPU fallback should work. Please try restarting the app."
+
+            LLMErrorType.CPU_FAILED ->
+                "CPU Processing Error" to "CPU processing failed. This might be a device compatibility issue or insufficient memory."
+
+            LLMErrorType.WARMUP_FAILED ->
+                "Model Warmup Failed" to "The AI model loaded but failed to warm up properly. Try restarting the app."
+
+            LLMErrorType.UNKNOWN_ERROR ->
+                "AI Model Error" to "An unexpected error occurred while loading the AI model: ${result.errorMessage}"
+        }
+    }
+
+    private suspend fun updateFinalSystemState(
+        knowledgeBaseReady: Boolean,
+        llmReady: Boolean,
+        translationReady: Boolean
+    ) {
+        withContext(Dispatchers.Main) {
+            _chatScreenUIState.value = _chatScreenUIState.value.copy(
+                isInitializingKnowledgeBase = false,
+                isInitializingLLM = false,
+                isDownloadingModel = false,
+                translationAvailable = translationReady,
+                isSystemReady = knowledgeBaseReady && llmReady // Translation is optional
+            )
+
+            val finalStatus = when {
+                !knowledgeBaseReady -> {
+
+                    "Knowledge base failure"
+                }
+
+                // 2) LLM failed → even if KB was ok
+                !llmReady -> {
+                    "AI model failure"
+                }
+
+                // 3) Translation failed, but core systems are up
+                !translationReady && llmReady && knowledgeBaseReady -> {
+
+                    Toast.makeText(
+                        application,
+                        "System ready! (English only – translation unavailable)",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    "English-only mode"
+                }
+
+                // 4) Everything is good
+                else -> {
+
+                    Toast.makeText(
+                        application,
+                        "System ready! You can start chatting!",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    "All systems operational"
+                }
+            }
+
+            Log.d("ChatViewModel", "Final state: $finalStatus")
         }
     }
 
@@ -334,6 +483,12 @@ class ChatViewModel(
 
      fun onChatScreenEvent(event: ChatScreenUIEvent) {
         when (event) {
+
+            is ChatScreenUIEvent.ToggleDebugMode -> {
+                    _chatScreenUIState.value = _chatScreenUIState.value.copy(
+                        showDebugLogs = !_chatScreenUIState.value.showDebugLogs
+                    )
+            }
             is ChatScreenUIEvent.LanguageChanged -> {
                 val previousLanguage = _chatScreenUIState.value.selectedLanguage
                 val newLanguage = event.language
@@ -519,6 +674,35 @@ class ChatViewModel(
                     Toast.LENGTH_LONG
                 ).show()
             }
+
+            is ChatScreenUIEvent.ErrorDialog.Dismiss -> {
+                _chatScreenUIState.value = _chatScreenUIState.value.copy(
+                    showErrorDialog = false
+                )
+            }
+
+            is ChatScreenUIEvent.ErrorDialog.Retry -> {
+                onChatScreenEvent(ChatScreenUIEvent.ErrorDialog.Dismiss)
+                _chatScreenUIState.value = _chatScreenUIState.value.copy(
+                    debugLogs = emptyList(),
+                    isSystemReady = false
+                )
+                initializeSystemComponents()
+            }
+
+            is ChatScreenUIEvent.ErrorDialog.Show -> {
+                _chatScreenUIState.value = _chatScreenUIState.value.copy(
+                    showErrorDialog = true,
+                    errorDialogTitle = event.title,
+                    errorDialogMessage = event.message,
+                    errorDialogType = event.type
+                )
+            }
+
+            is ChatScreenUIEvent.ErrorDialog.ExitApp -> {
+                android.os.Process.killProcess(android.os.Process.myPid())
+            }
+
         }
     }
 

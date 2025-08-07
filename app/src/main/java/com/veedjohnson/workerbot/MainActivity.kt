@@ -31,9 +31,9 @@ class MainActivity : ComponentActivity() {
                     }
                 )
             } else {
-                // Initialize knowledge base when splash finishes and chat screen appears
+                // Initialize system when splash finishes and chat screen appears
                 LaunchedEffect(Unit) {
-                    viewModel.initializeKnowledgeBase()
+                    viewModel.initializeSystemComponents()
                 }
 
                 ChatScreen(

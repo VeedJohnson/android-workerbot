@@ -21,10 +21,10 @@ class TranslationService(private val context: Context) {
     private var enToRuTranslator: Translator? = null
     private val languageIdentifier = LanguageIdentification.getClient()
 
-    suspend fun initializeTranslators(): Boolean = withContext(Dispatchers.IO) {
+    suspend fun initializeTranslators(onDebugLog: (String) -> Unit = {}): Boolean = withContext(Dispatchers.IO) {
         try {
             Log.d("TranslationService", "Initializing translator...")
-
+            onDebugLog("TranslationService - Initializing translator...")
             // Create Russian to English translator
             val ruToEnOptions = TranslatorOptions.Builder()
                 .setSourceLanguage(TranslateLanguage.RUSSIAN)
@@ -41,30 +41,33 @@ class TranslationService(private val context: Context) {
 
             // Download models if needed
             val conditions = DownloadConditions.Builder()
-                .requireWifi()
                 .build()
 
-            val ruToEnReady = downloadModel(ruToEnTranslator!!, conditions)
-            val enToRuReady = downloadModel(enToRuTranslator!!, conditions)
+            val ruToEnReady = downloadModel(ruToEnTranslator!!, conditions, onDebugLog)
+            val enToRuReady = downloadModel(enToRuTranslator!!, conditions, onDebugLog)
 
             val success = ruToEnReady && enToRuReady
             Log.d("TranslationService", "Translation models ready: $success")
+            onDebugLog("TranslationService - Translation models ready: $success")
             success
         } catch (e: Exception) {
+            onDebugLog("TranslationService - Failed to initialize translators: ${e.message}")
             Log.e("TranslationService", "Failed to initialize translators", e)
             false
         }
     }
 
-    private suspend fun downloadModel(translator: Translator, conditions: DownloadConditions): Boolean {
+    private suspend fun downloadModel(translator: Translator, conditions: DownloadConditions, onDebugLog: (String) -> Unit): Boolean {
         return suspendCancellableCoroutine { continuation ->
             translator.downloadModelIfNeeded(conditions)
                 .addOnSuccessListener {
                     Log.d("TranslationService", "Model downloaded successfully")
+                    onDebugLog("TranslationService - Model download successful")
                     continuation.resume(true)
                 }
                 .addOnFailureListener { exception ->
                     Log.e("TranslationService", "Model download failed", exception)
+                    onDebugLog("TranslationService - Failed to download model: ${exception.message}")
                     continuation.resume(false)
                 }
         }

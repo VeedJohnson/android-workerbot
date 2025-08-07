@@ -2,7 +2,6 @@ package com.veedjohnson.workerbot.ui.screens.chat
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.os.LocaleList
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
@@ -33,27 +32,38 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -69,6 +79,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
@@ -76,6 +87,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -84,12 +96,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import com.veedjohnson.workerbot.domain.SpeechToTextService
-import com.veedjohnson.workerbot.ui.components.AppAlertDialog
 import com.veedjohnson.workerbot.ui.theme.AppTheme
 import dev.jeziellago.compose.markdowntext.MarkdownText
-import java.util.Locale
 
 // Chat message data class
 data class ChatMessage(
@@ -148,7 +159,8 @@ fun ChatScreen(
                                 currentLanguage = screenUiState.selectedLanguage,
                                 onLanguageSelected = { language ->
                                     onScreenEvent(ChatScreenUIEvent.LanguageChanged(language))
-                                }
+                                },
+                                translationAvailable = screenUiState.translationAvailable
                             )
                         }
                     }
@@ -188,8 +200,16 @@ fun ChatScreen(
                 )
 
                 AIDisclaimerBar(screenUiState.selectedLanguage)
+
             }
-            AppAlertDialog()
+            SystemErrorDialog(
+                showDialog = screenUiState.showErrorDialog,
+                title = screenUiState.errorDialogTitle,
+                message = screenUiState.errorDialogMessage,
+                errorType = screenUiState.errorDialogType,
+                onRetry = { onScreenEvent(ChatScreenUIEvent.ErrorDialog.Retry) },
+                onExitApp = {onScreenEvent(ChatScreenUIEvent.ErrorDialog.ExitApp)}
+            )
         }
     }
 }
@@ -269,7 +289,7 @@ private fun ChatMessagesArea(
 
                 if (isInitializingLLM || isDownloadingModel) {
                     item {
-                        if (isDownloadingModel) {
+                        if (isDownloadingModel && screenUiState.downloadProgress < 100) {
                             ModelDownloadMessage(
                                 progress = screenUiState.downloadProgress,
                                 status = screenUiState.downloadStatus
@@ -280,7 +300,13 @@ private fun ChatMessagesArea(
                     }
                 }
 
-                if (!isSystemReady && !isInitializingKnowledgeBase && !isInitializingLLM) {
+                if (screenUiState.isInitializingTranslator) {
+                    item {
+                        InitializingMessage("Preparing translators...")
+                    }
+                }
+
+                if (!isSystemReady && !isInitializingKnowledgeBase && !isInitializingLLM && !screenUiState.isInitializingTranslator) {
                     item {
                         InitializingMessage("System initialization failed. Please restart the app.")
                     }
@@ -291,7 +317,8 @@ private fun ChatMessagesArea(
                         message = message,
                         showTypingIndicator = !message.isFromUser &&
                                 message == messages.lastOrNull() &&
-                                isGenerating
+                                isGenerating,
+
                     )
                 }
 
@@ -304,7 +331,8 @@ private fun ChatMessagesArea(
                                     isFromUser = false,
                                     isStreaming = true
                                 ),
-                                showTypingIndicator = screenUiState.isStreamingResponse
+                                showTypingIndicator = screenUiState.isStreamingResponse,
+
                             )
                     }
                 }
@@ -316,6 +344,7 @@ private fun ChatMessagesArea(
 @Composable
 fun LanguageSelector(
     currentLanguage: AppLanguage,
+    translationAvailable: Boolean,
     onLanguageSelected: (AppLanguage) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -324,8 +353,13 @@ fun LanguageSelector(
         // Current language display
         Row(
             modifier = Modifier
-                .clickable { expanded = true }
-                .padding(8.dp),
+                .clickable {
+                    if (translationAvailable) {
+                        expanded = true
+                    }
+                }
+                .padding(8.dp)
+                .alpha(if (translationAvailable) 1f else 0.6f), // Dim if not available
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
@@ -336,8 +370,24 @@ fun LanguageSelector(
             Text(
                 text = currentLanguage.code.uppercase(),
                 style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium
+                fontWeight = FontWeight.Medium,
+                color = if (translationAvailable) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
             )
+
+            // Show indicator if translation is unavailable
+            if (!translationAvailable) {
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = "Translation unavailable",
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
 
         // Dropdown menu
@@ -345,25 +395,99 @@ fun LanguageSelector(
             expanded = expanded,
             onDismissRequest = { expanded = false }
         ) {
+            if (!translationAvailable) {
+                // Show warning message at top of menu
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "Translation Offline",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                Text(
+                                    text = "Only English available",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    },
+                    onClick = { /* Do nothing - just informational */ },
+                    enabled = false
+                )
+
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant
+                )
+            }
+
             AppLanguage.entries.forEach { language ->
+                val isAvailable = translationAvailable || language == AppLanguage.ENGLISH
+
                 DropdownMenuItem(
                     text = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 text = language.flag,
-                                fontSize = 18.sp
+                                fontSize = 18.sp,
+                                modifier = Modifier.alpha(if (isAvailable) 1f else 0.4f)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = language.displayName,
-                                style = MaterialTheme.typography.bodyMedium
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (isAvailable) {
+                                    MaterialTheme.colorScheme.onSurface
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                modifier = Modifier.alpha(if (isAvailable) 1f else 0.6f)
                             )
+
+                            // Show checkmark for current language
+                            if (language == currentLanguage) {
+                                Spacer(modifier = Modifier.weight(1f))
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = "Current language",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+
+                            // Show unavailable indicator
+                            if (!isAvailable) {
+                                Spacer(modifier = Modifier.weight(1f))
+                                Text(
+                                    text = "Offline",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontStyle = FontStyle.Italic
+                                )
+                            }
                         }
                     },
                     onClick = {
-                        onLanguageSelected(language)
-                        expanded = false
-                    }
+                        if (isAvailable) {
+                            onLanguageSelected(language)
+                            expanded = false
+                        }
+                    },
+                    enabled = isAvailable
                 )
             }
         }
@@ -407,23 +531,51 @@ private fun EmptyStateView(language: AppLanguage = AppLanguage.ENGLISH) {
 }
 
 
+
 @Composable
 private fun InitializingMessage(message: String = "Initializing...") {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.Start
     ) {
-        AssistantMessageBubble(
-            content = message,
-            showTypingIndicator = true
-        )
+        // Custom message bubble with spinner
+        Card(
+            modifier = Modifier
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .widthIn(max = 280.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            shape = RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Loading spinner
+                if (!message.contains("system initialization failed", ignoreCase = true)) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                // Message text
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 
 @Composable
 private fun ChatMessageItem(
     message: ChatMessage,
-    showTypingIndicator: Boolean = false
+    showTypingIndicator: Boolean = false,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1064,6 +1216,95 @@ private fun startSpeechRecognition(
             }
         }
     )
+}
+
+
+// Error Alert Dialog Composable
+@Composable
+fun SystemErrorDialog(
+    showDialog: Boolean,
+    title: String,
+    message: String,
+    errorType: ErrorType,
+    onRetry: () -> Unit,
+    onExitApp: () -> Unit
+) {
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = {},
+            icon = {
+                Icon(
+                    imageVector = when (errorType) {
+                        ErrorType.DOWNLOAD_FAILED -> Icons.Default.CloudOff
+                        ErrorType.LLM_FAILED -> Icons.Default.Psychology
+                        ErrorType.KNOWLEDGE_BASE_FAILED -> Icons.Default.Storage
+                        else -> Icons.Default.Error
+                    },
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(32.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            },
+            text = {
+                Column {
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            },
+            confirmButton = {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Exit App button
+                    OutlinedButton(
+                        onClick = onExitApp,
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ExitToApp,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Exit App")
+                    }
+
+                    // Retry button
+                    Button(
+                        onClick = onRetry,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Retry")
+                    }
+                }
+            },
+            dismissButton = null,
+            properties = DialogProperties(
+                dismissOnBackPress = false,
+                dismissOnClickOutside = false
+            )
+        )
+    }
 }
 
 

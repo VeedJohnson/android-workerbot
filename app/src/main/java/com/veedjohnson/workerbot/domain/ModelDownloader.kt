@@ -112,6 +112,7 @@ class ModelDownloaderService(private val context: Context) {
             }
 
             ModelDownloadResult.Error("Download failed: ${e.message}")
+            throw e
         }
     }
 
