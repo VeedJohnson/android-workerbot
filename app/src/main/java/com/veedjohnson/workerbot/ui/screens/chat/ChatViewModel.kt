@@ -726,10 +726,13 @@ class ChatViewModel(
 
                 Log.d("ChatViewModel", "English query: $englishQuery")
 
-                // Step 2: RAG retrieval using English query
+                // Step 2: Rewrite query to standalone format for better context retrieval
+                val fused = fusedQueryForRetrieval(englishQuery, conversationHistory)
+
+                // Step 3: RAG retrieval using Rewritten query
                 var jointContext = ""
                 val retrievedContextList = ArrayList<RetrievedContext>()
-                val queryEmbedding = sentenceEncoder.encodeText(query)
+                val queryEmbedding = sentenceEncoder.encodeText(fused)
 
                 // Get similar chunks and deduplicate more aggressively
                 val allChunks = chunksDB.getSimilarChunks(queryEmbedding, n = 2)
@@ -761,7 +764,7 @@ class ChatViewModel(
 
                 jointContext = retrievedContextList.joinToString("\n----------\n") { it.context }
 
-                Log.d("ChatViewModel", "Final context for query '$query':")
+                Log.d("ChatViewModel", "Final context for query '$fused':")
                 Log.d("ChatViewModel", jointContext)
                 Log.d("ChatViewModel", "Context length: ${jointContext.length} chars")
                 Log.d(
@@ -769,16 +772,15 @@ class ChatViewModel(
                     "Conversation history size: ${conversationHistory.size} messages"
                 )
 
-                // Step 3: Generate response using English RAG prompt
+                // Step 4: Generate response using English RAG prompt
 
                     try {
                         // Build enhanced RAG prompt
-                        val ragPrompt = mediaPipeLLM.buildRagPrompt(englishQuery, jointContext)
+                        val ragPrompt = mediaPipeLLM.buildPromptWithHistory(englishQuery, jointContext, conversationHistory)
 
                         var fullEnglishResponse = ""
                         mediaPipeLLM.generateResponseStreaming(
                             ragPrompt,
-                            conversationHistory.dropLast(1) // Exclude current user message
                         ) { partialResult: String, done: Boolean ->
                             fullEnglishResponse += partialResult
 
@@ -869,6 +871,22 @@ class ChatViewModel(
         }
     }
 
+    private fun fusedQueryForRetrieval(
+        current: String,
+        history: List<ChatMessage>
+    ): String {
+        val lastTurns = history.takeLast(2).joinToString("\n") {
+            if (it.isFromUser) "Human: ${it.content}" else "Assistant: ${it.content}"
+        }
+        return """
+    Context:
+    $lastTurns
+
+    Question:
+    $current
+    """.trimIndent()
+    }
+
     private fun calculateSimpleSimilarity(text1: String, text2: String): Double {
         // Remove section numbers and common words for better comparison
         val cleanText1 = text1.replace(Regex("\\d+\\.\\d+\\s+"), "").lowercase()
@@ -882,3 +900,4 @@ class ChatViewModel(
         return if (union == 0) 0.0 else intersection.toDouble() / union.toDouble()
     }
 }
+

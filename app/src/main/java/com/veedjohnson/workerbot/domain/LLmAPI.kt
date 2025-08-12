@@ -166,103 +166,120 @@ class MediaPipeLLMAPI(
         }
     }
 
+
+    private fun normalizeForLLM(s: String): String =
+        s.replace(Regex("[\\u00A0\\u2007\\u202F]"), " ") // NBSP variants -> space
+            .replace(Regex("[ \\t]{2,}"), " ")             // collapse spaces/tabs
+            .replace(Regex("\\n{3,}"), "\n\n")             // collapse blank lines
+            .trim()
+
+
     suspend fun generateResponseStreaming(
         prompt: String,
-        conversationHistory: List<ChatMessage> = emptyList(),
         onPartialResponse: StreamingCallback
     ) = withContext(Dispatchers.IO) {
 
-            try {
-                if (!isModelReady) {
-                    onPartialResponse("Model not initialized", true)
-                    return@withContext
-                }
+        try {
+            if (!isModelReady) {
+                onPartialResponse("Model not initialized", true)
+                return@withContext
+            }
 
-                // Create fresh session for each request
-                val session = createFreshSession()
-                if (session == null) {
-                    onPartialResponse("Failed to create session", true)
-                    return@withContext
-                }
+            // Create fresh session for each request
+            val session = createFreshSession()
+            if (session == null) {
+                onPartialResponse("Failed to create session", true)
+                return@withContext
+            }
 
 
-                // Build prompt with conversation history
-                val fullPrompt = buildPromptWithHistory(prompt, conversationHistory)
 
-                Log.d("MediaPipeLLM", "Fresh session created. Prompt length: ${fullPrompt.length}")
-                Log.d("MediaPipeLLM", "Full prompt preview: ${fullPrompt.take(200)}...")
+            Log.d("MediaPipeLLM", "Fresh session created. Prompt length: ${prompt.length}")
+            Log.d("MediaPipeLLM", "Full prompt preview: ${prompt}...")
 
-                session.addQueryChunk(fullPrompt)
-                session.generateResponseAsync { partialResult, done ->
-                    onPartialResponse(partialResult, done)
-                    if (done) {
-                        // Clean up session after use
-                        try {
-                            session.close()
-                            Log.d("MediaPipeLLM", "Session closed after response completion")
-                        } catch (e: Exception) {
-                            Log.w("MediaPipeLLM", "Error closing session", e)
-                        }
+            session.addQueryChunk(prompt)
+            session.generateResponseAsync { partialResult, done ->
+                onPartialResponse(partialResult, done)
+                if (done) {
+                    // Clean up session after use
+                    try {
+                        session.close()
+                        Log.d("MediaPipeLLM", "Session closed after response completion")
+                    } catch (e: Exception) {
+                        Log.w("MediaPipeLLM", "Error closing session", e)
                     }
                 }
-            } catch (e: Exception) {
-                Log.e("MediaPipeLLM", "Error in streaming response", e)
-                onPartialResponse("I'm sorry, but I don't have that information. For more help, please contact FiftyEight at https://fiftyeight.io/contact/", true)
             }
+        } catch (e: Exception) {
+            Log.e("MediaPipeLLM", "Error in streaming response", e)
+            onPartialResponse("I'm sorry, but I don't have that information. For more help, please contact FiftyEight at https://fiftyeight.io/contact/", true)
+        }
 
     }
 
-    private fun buildPromptWithHistory(
-        currentPrompt: String,
+    fun buildPromptWithHistory(
+        userQuery: String,
+        context: String,
         conversationHistory: List<ChatMessage>
     ): String {
         val recentHistory = conversationHistory.takeLast(2)
 
-        return if (recentHistory.isNotEmpty()) {
-            val historyText = recentHistory.joinToString("\n\n") { message ->
+        val historyText = if (recentHistory.isNotEmpty()) {
+            recentHistory.joinToString("\n\n") { message ->
                 if (message.isFromUser) {
                     "Human: ${message.content}"
                 } else {
                     "Assistant: ${message.content}"
                 }
             }
-
-            """
-            Previous conversation:
-            $historyText
-
-            Current request:
-            $currentPrompt
-            """.trimIndent()
         } else {
-            currentPrompt
+            ""
         }
-    }
 
-    // Enhanced prompt building for RAG
-    fun buildRagPrompt(userQuery: String, context: String): String {
-        return (
+        val historySection = if (historyText.isNotEmpty()) {
             """
-          Your task is to act as WorkerBot, assisting users with questions about the UK Seasonal Worker Scheme.
+        **Previous conversation:**
+        $historyText
 
-Personality:
-• Friendly and knowledgeable, like a helpful colleague
-• Explain things clearly and focus on what matters most to the user
+        """.trimIndent()
+        } else {
+            ""
+        }
 
-Response guidelines:
-• For greetings: Warmly inquire how you can assist with the scheme
-• For questions: Provide brief (1-2 sentences) and conversational answers under 100 words
-• Use everyday language; avoid jargon
-• Include URLs only if referenced in the context and directly helpful
+        return normalizeForLLM(
+                """
+                    Your task is to act as WorkerBot, a helpful assistant for users with questions about the UK Seasonal Worker Scheme.
 
-If information is unavailable:
-• Respond with "I don't have that specific information. For more details, contact FiftyEight at https://fiftyeight.io/contact/"
+                    **Personality:**
+                    * Friendly, professional, and knowledgeable.
+                    * Your primary goal is to provide accurate and concise information based ONLY on the context provided.
 
-Context: $context
-Query: $userQuery
-Response:
-          """.trimIndent())
+                    **Response Guidelines:**
+                    * For greetings: Warmly inquire how you can assist with the scheme
+                    * For questions, you must provide short (1-2 sentences) answers not more than 100 words.
+                    * Use everyday language; avoid jargon.
+                    * Include URLs only if they are directly helpful and mentioned in the context.
+
+                    **Strict Instructions for Unavailable Information:**
+                    * If the provided context does not contain the answer to the user's question, you MUST respond with the following exact phrase and nothing else: "I don't have that specific information. For more details, contact FiftyEight at https://fiftyeight.io/contact/"
+
+                    ---
+
+                    ### Conversation History and Context
+
+                    $historySection
+
+                    **Context:**
+                    $context
+                    **Query:** $userQuery
+
+                    **Response:**
+
+                """.trimIndent()
+                )
     }
+
+
 
     fun cleanup() {
         try {
